@@ -1,5 +1,6 @@
 var target = Argument("target", "Run");
 var configuration = Argument("configuration", "Release");
+var benchmarkFilter = Argument("benchmarkFilter", "*");
 
 Task("InstallSdk")
 .Does(() =>
@@ -51,6 +52,24 @@ Task("GenerateCoverage")
         ReportGenerator(new GlobPattern("**/coverage.cobertura.xml"), Directory("./coveragereport"), new ReportGeneratorSettings
         {
             ReportTypes = [ReportGeneratorReportType.Html],
+        });
+    });
+
+Task("Benchmark")
+    .IsDependentOn("InstallSdk")
+    .Does(() =>
+    {
+        const string benchmarkProject = "./bench/Api.Benchmarks/Api.Benchmarks.csproj";
+        string benchmarkDll = $"./bench/Api.Benchmarks/bin/{configuration}/net10.0/Api.Benchmarks.dll";
+
+        DotNetBuild(benchmarkProject, new DotNetBuildSettings
+        {
+            Configuration = configuration,
+        });
+
+        StartProcess("dotnet", new ProcessSettings
+        {
+            Arguments = $"{benchmarkDll} --filter \"{benchmarkFilter}\"",
         });
     });
 

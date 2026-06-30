@@ -30,7 +30,7 @@ internal sealed class PeerSyncService(
             });
         }
 
-        KnownServerDto[] peers = await appContext.Set<KnownServerEntity>()
+        KnownServerDto[] peers = await appContext.KnownServers
             .Where(server => server.IsActive)
             .OrderBy(server => server.Url)
             .Select(server => new KnownServerDto
@@ -53,7 +53,7 @@ internal sealed class PeerSyncService(
     {
         string? publicUrl = TryNormalizeUrl(_peerSyncOptions.PublicUrl);
 
-        string[] peers = await appContext.Set<KnownServerEntity>()
+        string[] peers = await appContext.KnownServers
             .Where(server => server.Url != publicUrl)
             .Select(server => server.Url)
             .ToArrayAsync(cancellationToken);
@@ -141,31 +141,48 @@ internal sealed class PeerSyncService(
             return;
         }
 
-        KnownServerEntity? entity = await appContext.Set<KnownServerEntity>()
-            .SingleOrDefaultAsync(server => server.Url == normalizedPeerUrl, cancellationToken);
-
         DateTime now = DateTime.UtcNow;
-        if (entity is null)
-        {
-            entity = new KnownServerEntity
-            {
-                Url = normalizedPeerUrl,
-                IsActive = isActive,
-                LastSeenAtUtc = isActive ? now : null,
-            };
 
-            await appContext.AddAsync(entity, cancellationToken);
-        }
-        else
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            entity.IsActive = isActive;
-            if (isActive)
+            KnownServerEntity? entity = await appContext.KnownServers
+                .SingleOrDefaultAsync(server => server.Url == normalizedPeerUrl, cancellationToken);
+
+            if (entity is null)
             {
-                entity.LastSeenAtUtc = now;
+                entity = new KnownServerEntity
+                {
+                    Url = normalizedPeerUrl,
+                    IsActive = isActive,
+                    FirstSeenAtUtc = now,
+                    LastSeenAtUtc = isActive ? now : null,
+                };
+
+                await appContext.AddAsync(entity, cancellationToken);
+            }
+            else
+            {
+                entity.IsActive = isActive;
+                if (isActive)
+                {
+                    entity.LastSeenAtUtc = now;
+                }
+            }
+
+            try
+            {
+                await appContext.SaveChangesAsync(cancellationToken);
+                return;
+            }
+            catch (DbUpdateException) when (attempt == 0)
+            {
+                foreach (var entry in appContext.ChangeTracker.Entries<KnownServerEntity>()
+                    .Where(entry => entry.Entity.Url == normalizedPeerUrl))
+                {
+                    entry.State = EntityState.Detached;
+                }
             }
         }
-
-        await appContext.SaveChangesAsync(cancellationToken);
     }
 
     private static string? TryNormalizeUrl(string? url)

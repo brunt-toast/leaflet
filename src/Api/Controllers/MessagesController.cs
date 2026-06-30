@@ -1,4 +1,5 @@
 using Api.Entities;
+using Api.Services;
 using AppDbContext = Api.Context.AppContext;
 using Core.Dto;
 using Core.Requests.Messages;
@@ -10,7 +11,9 @@ namespace Api.Controllers;
 
 [ApiController]
 [Route("api/messages")]
-public sealed class MessagesController(AppDbContext appContext) : ControllerBase
+public sealed class MessagesController(
+    AppDbContext appContext,
+    IMessageErasureCodingService messageErasureCodingService) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<GetMessagesResponse>(StatusCodes.Status200OK)]
@@ -18,6 +21,12 @@ public sealed class MessagesController(AppDbContext appContext) : ControllerBase
         [FromQuery] GetMessagesRequest request,
         CancellationToken cancellationToken)
     {
+        await messageErasureCodingService.EnsureMessagesAvailableAsync(
+            request.RoomHash,
+            request.MaxId,
+            request.NumberToFetch,
+            cancellationToken);
+
         EncryptedMessageDto[] messages = await appContext.EncryptedMessages
             .Where(message => message.RoomHash == request.RoomHash && message.Id <= request.MaxId)
             .OrderByDescending(message => message.Id)
@@ -60,6 +69,17 @@ public sealed class MessagesController(AppDbContext appContext) : ControllerBase
 
         await appContext.EncryptedMessages.AddRangeAsync(entities, cancellationToken);
         await appContext.SaveChangesAsync(cancellationToken);
+        await messageErasureCodingService.DistributeMessageShardsAsync(
+            entities.Select(entity => new EncryptedMessageDto
+            {
+                Id = entity.Id,
+                RoomHash = entity.RoomHash,
+                SenderPublicKey = entity.SenderPublicKey,
+                Nonce = entity.Nonce,
+                CypherText = entity.CypherText,
+                Signature = entity.Signature,
+            }),
+            cancellationToken);
 
         return Ok(new CreateMessagesResponse());
     }

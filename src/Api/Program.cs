@@ -17,11 +17,17 @@ public class Program
         builder.Services.AddDbContext<AppDbContext>(options =>
             options.UseSqlite(connectionString));
         builder.Services.Configure<PeerSyncOptions>(builder.Configuration.GetSection(PeerSyncOptions.SectionName));
+        builder.Services.Configure<ErasureCodingOptions>(builder.Configuration.GetSection(ErasureCodingOptions.SectionName));
         builder.Services.AddHttpClient(nameof(PeerSyncService), client =>
         {
             client.Timeout = TimeSpan.FromSeconds(10);
         });
+        builder.Services.AddHttpClient(nameof(MessageErasureCodingService), client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(10);
+        });
         builder.Services.AddScoped<IPeerSyncService, PeerSyncService>();
+        builder.Services.AddScoped<IMessageErasureCodingService, MessageErasureCodingService>();
         builder.Services.AddHostedService<PeerPollingBackgroundService>();
 
         builder.Services.AddControllers();

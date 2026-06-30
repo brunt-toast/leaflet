@@ -8,17 +8,17 @@ internal sealed class PeerPollingBackgroundService(
     IOptions<PeerSyncOptions> options,
     ILogger<PeerPollingBackgroundService> logger) : BackgroundService
 {
-    private readonly PeerSyncOptions peerSyncOptions = options.Value;
+    private readonly PeerSyncOptions _peerSyncOptions = options.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (peerSyncOptions.PollIntervalSeconds <= 0)
+        if (_peerSyncOptions.PollIntervalSeconds <= 0)
         {
             logger.LogWarning("Peer polling is disabled because PollIntervalSeconds is not greater than zero.");
             return;
         }
 
-        using PeriodicTimer timer = new(TimeSpan.FromSeconds(peerSyncOptions.PollIntervalSeconds));
+        using PeriodicTimer timer = new(TimeSpan.FromSeconds(_peerSyncOptions.PollIntervalSeconds));
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {

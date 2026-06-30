@@ -30,6 +30,7 @@ public class Program
         builder.Services.AddScoped<IPeerSyncService, PeerSyncService>();
         builder.Services.AddScoped<IMessageErasureCodingService, MessageErasureCodingService>();
         builder.Services.AddHostedService<PeerPollingBackgroundService>();
+        builder.Services.AddHostedService<MessageIntegrityBackgroundService>();
 
         builder.Services.AddControllers();
         builder.Services.AddOpenApi();

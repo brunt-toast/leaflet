@@ -7,7 +7,11 @@ internal sealed class TomlConfigLoader
 {
     public TomlConfigurationSnapshot Load(string path)
     {
-        string content = File.ReadAllText(path);
+        return LoadFromContent(path, File.ReadAllText(path));
+    }
+
+    public TomlConfigurationSnapshot LoadFromContent(string path, string content)
+    {
         TomlTable root = TomlSerializer.Deserialize<TomlTable>(content)
             ?? throw new InvalidOperationException($"Could not parse TOML config at '{path}'.");
 

@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -45,7 +46,25 @@ internal static class Program
             return GenerateIdentity(name);
         });
 
+        Command encryptConfigCommand = new("encrypt-config", "Encrypt config.toml using a password.");
+        encryptConfigCommand.Options.Add(configOption);
+        encryptConfigCommand.SetAction(parseResult =>
+        {
+            FileInfo configFile = parseResult.GetValue(configOption) ?? new FileInfo("config.toml");
+            return EncryptConfig(configFile);
+        });
+
+        Command decryptConfigCommand = new("decrypt-config", "Decrypt config.toml using a password.");
+        decryptConfigCommand.Options.Add(configOption);
+        decryptConfigCommand.SetAction(parseResult =>
+        {
+            FileInfo configFile = parseResult.GetValue(configOption) ?? new FileInfo("config.toml");
+            return DecryptConfig(configFile);
+        });
+
         rootCommand.Subcommands.Add(generateIdentityCommand);
+        rootCommand.Subcommands.Add(encryptConfigCommand);
+        rootCommand.Subcommands.Add(decryptConfigCommand);
         return rootCommand.Parse(args).InvokeAsync();
     }
 
@@ -92,7 +111,17 @@ internal static class Program
     {
         string configPath = ResolveConfigPath(configFile);
         TomlConfigLoader loader = new();
-        TomlConfigurationSnapshot snapshot = loader.Load(configPath);
+        ConfigProtectionService protectionService = new();
+        string configContent = File.ReadAllText(configPath);
+        if (protectionService.IsEncrypted(configContent))
+        {
+            string password = PromptForPassword(
+                "Config password",
+                "Enter the password to decrypt config.toml in memory.");
+            configContent = protectionService.Decrypt(configContent, password);
+        }
+
+        TomlConfigurationSnapshot snapshot = loader.LoadFromContent(configPath, configContent);
 
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(snapshot.FlattenedValues);
@@ -102,6 +131,7 @@ internal static class Program
         builder.Services.AddSingleton(snapshot);
         builder.Services.AddSingleton(snapshot.Config);
         builder.Services.AddSingleton<IAnsiConsole>(_ => AnsiConsole.Console);
+        builder.Services.AddSingleton<IConfigProtectionService, ConfigProtectionService>();
         builder.Services.AddSingleton(new TuiLaunchOptions
         {
             ServerName = serverName,
@@ -135,6 +165,62 @@ internal static class Program
         }
 
         throw new FileNotFoundException($"Could not locate '{configFile.Name}'. Checked: {string.Join(", ", candidates)}");
+    }
+
+    private static int EncryptConfig(FileInfo configFile)
+    {
+        string configPath = ResolveConfigPath(configFile);
+        ConfigProtectionService protectionService = new();
+        string content = File.ReadAllText(configPath);
+
+        if (protectionService.IsEncrypted(content))
+        {
+            AnsiConsole.MarkupLine("[yellow]Config is already encrypted.[/]");
+            return 0;
+        }
+
+        string password = PromptForPassword("New password", "Enter a password to encrypt config.toml.");
+        string confirmPassword = PromptForPassword("Confirm password", "Re-enter the password.");
+        if (!string.Equals(password, confirmPassword, StringComparison.Ordinal))
+        {
+            AnsiConsole.MarkupLine("[red]Passwords did not match.[/]");
+            return 1;
+        }
+
+        string encryptedContent = protectionService.Encrypt(content, password);
+        File.WriteAllText(configPath, encryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        AnsiConsole.MarkupLine($"[green]Encrypted[/] {Markup.Escape(configPath)}");
+        return 0;
+    }
+
+    private static int DecryptConfig(FileInfo configFile)
+    {
+        string configPath = ResolveConfigPath(configFile);
+        ConfigProtectionService protectionService = new();
+        string content = File.ReadAllText(configPath);
+
+        if (!protectionService.IsEncrypted(content))
+        {
+            AnsiConsole.MarkupLine("[yellow]Config is already plaintext.[/]");
+            return 0;
+        }
+
+        string password = PromptForPassword("Config password", "Enter the password to decrypt config.toml.");
+        string decryptedContent = protectionService.Decrypt(content, password);
+        File.WriteAllText(configPath, decryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        AnsiConsole.MarkupLine($"[green]Decrypted[/] {Markup.Escape(configPath)}");
+        return 0;
+    }
+
+    private static string PromptForPassword(string label, string prompt)
+    {
+        return AnsiConsole.Prompt(
+            new TextPrompt<string>(prompt)
+                .PromptStyle("green")
+                .Secret()
+                .Validate(input => string.IsNullOrWhiteSpace(input)
+                    ? ValidationResult.Error($"[red]{Markup.Escape(label)} cannot be empty.[/]")
+                    : ValidationResult.Success()));
     }
 }
 

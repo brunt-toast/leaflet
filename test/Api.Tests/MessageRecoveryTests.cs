@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using Api.Responses;
 using Core.Dto;
 using Core.Requests.Messages;
 using Core.Responses.Messages;
@@ -262,7 +263,81 @@ public sealed class MessageRecoveryTests
         }
     }
 
-    private static async Task<List<ApiNode>> StartNodesAsync(string apiDllPath, string testRoot, int count)
+    [TestMethod]
+    public async Task IntegrityRepair_ReSeedsMissingShards_BeforeAnotherPeerFails()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'." );
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 6, repairIntervalSeconds: 1));
+
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                for (int j = i + 1; j < nodes.Count; j++)
+                {
+                    await ConnectNodesAsync(nodes[i], nodes[j]);
+                }
+            }
+
+            await CreateMessageAsync(nodes[0], "room-repair", "cipher-text-repair");
+
+            await nodes[0].StopAsync();
+            await nodes[4].StopAsync();
+            await nodes[5].StopAsync();
+
+            await WaitForAsync(
+                async () =>
+                {
+                    GetMessageShardsResponse? shardResponse = await nodes[3].Client.GetFromJsonAsync<GetMessageShardsResponse>(
+                        "/api/internal/message-shards?roomHash=room-repair&maxId=9223372036854775807&numberToFetch=1");
+                    return shardResponse?.MessageShards
+                        .Where(shard => shard.MessageId > 0)
+                        .Select(shard => shard.ShardIndex)
+                        .Distinct()
+                        .Count() >= 2;
+                },
+                timeout: TimeSpan.FromSeconds(10),
+                failureMessageFactory: () => nodes[1].FormatFailureAsync(
+                    "Expected integrity repair to re-seed additional shards onto a surviving peer."));
+
+            await nodes[2].StopAsync();
+
+            GetMessagesResponse repairedResponse = await GetMessagesAsync(nodes[3], "room-repair", numberToFetch: 1);
+            Assert.AreEqual(1, repairedResponse.Messages.Length, await nodes[3].FormatFailureAsync(
+                "Expected message retrieval to succeed after integrity repair re-seeded shards."));
+            Assert.AreEqual("cipher-text-repair", repairedResponse.Messages[0].CypherText);
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static async Task<List<ApiNode>> StartNodesAsync(
+        string apiDllPath,
+        string testRoot,
+        int count,
+        int repairIntervalSeconds = 0)
     {
         List<ApiNode> nodes = [];
 
@@ -273,7 +348,7 @@ public sealed class MessageRecoveryTests
             string dbPath = Path.Combine(testRoot, $"node-{i + 1}.db");
             string nodeName = $"node-{i + 1}";
 
-            ApiNode node = new(apiDllPath, nodeName, publicUrl, dbPath, testRoot);
+            ApiNode node = new(apiDllPath, nodeName, publicUrl, dbPath, testRoot, repairIntervalSeconds);
             await node.StartAsync();
             nodes.Add(node);
         }
@@ -357,22 +432,58 @@ public sealed class MessageRecoveryTests
         throw new InvalidOperationException("Could not locate the solution root.");
     }
 
+    private static async Task WaitForAsync(
+        Func<Task<bool>> condition,
+        TimeSpan timeout,
+        Func<Task<string>> failureMessageFactory)
+    {
+        DateTime deadline = DateTime.UtcNow.Add(timeout);
+        Exception? lastError = null;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (await condition())
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+
+            await Task.Delay(250);
+        }
+
+        string failureMessage = await failureMessageFactory();
+        if (lastError is not null)
+        {
+            failureMessage = $"{failureMessage}{Environment.NewLine}Last error: {lastError}";
+        }
+
+        Assert.Fail(failureMessage);
+    }
+
     private sealed class ApiNode : IAsyncDisposable
     {
         private readonly string _apiDllPath;
         private readonly string _dbPath;
         private readonly string _workingDirectory;
+        private readonly int _repairIntervalSeconds;
         private readonly List<string> _logLines = [];
         private Process? _process;
         private bool _stopped;
 
-        public ApiNode(string apiDllPath, string name, string publicUrl, string dbPath, string workingDirectory)
+        public ApiNode(string apiDllPath, string name, string publicUrl, string dbPath, string workingDirectory, int repairIntervalSeconds)
         {
             _apiDllPath = apiDllPath;
             Name = name;
             PublicUrl = publicUrl;
             _dbPath = dbPath;
             _workingDirectory = workingDirectory;
+            _repairIntervalSeconds = repairIntervalSeconds;
             Client = new HttpClient
             {
                 BaseAddress = new Uri(publicUrl),
@@ -402,6 +513,8 @@ public sealed class MessageRecoveryTests
             startInfo.Environment["PeerSync__PollIntervalSeconds"] = "1";
             startInfo.Environment["ErasureCoding__DataShards"] = "3";
             startInfo.Environment["ErasureCoding__ParityShards"] = "2";
+            startInfo.Environment["ErasureCoding__RepairIntervalSeconds"] = _repairIntervalSeconds.ToString();
+            startInfo.Environment["ErasureCoding__RepairBatchSize"] = "100";
 
             _process = new Process
             {

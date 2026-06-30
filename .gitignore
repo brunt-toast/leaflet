@@ -133,3 +133,6 @@ _Pvt_Extensions
 # Extended
 FodyWeavers.xsd
 .env
+*.db
+*.db-shm
+*.db-wal

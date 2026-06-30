@@ -1,4 +1,5 @@
 using Api.Configuration;
+using Api.Services;
 using AppDbContext = Api.Context.AppContext;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,6 +16,13 @@ public class Program
 
         builder.Services.AddDbContext<AppDbContext>(options =>
             options.UseSqlite(connectionString));
+        builder.Services.Configure<PeerSyncOptions>(builder.Configuration.GetSection(PeerSyncOptions.SectionName));
+        builder.Services.AddHttpClient(nameof(PeerSyncService), client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(10);
+        });
+        builder.Services.AddScoped<IPeerSyncService, PeerSyncService>();
+        builder.Services.AddHostedService<PeerPollingBackgroundService>();
 
         builder.Services.AddControllers();
         builder.Services.AddOpenApi();
@@ -32,12 +40,8 @@ public class Program
         }
 
         app.UseHttpsRedirection();
-
         app.UseAuthorization();
-
-
         app.MapControllers();
-
         app.Run();
     }
 }

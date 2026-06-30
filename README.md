@@ -1,24 +1,24 @@
-# PROJECTNAME/REPOSITORYNAME
+# brunt-toast/leaflet
 
 ![.Net](https://img.shields.io/badge/.NET-5C2D91?style=for-the-badge&logo=.net&logoColor=white)
-![C#](https://img.shields.io/badge/c%23-%23239120.svg?style=for-the-badge&logo=csharp&logoColor=white) ... - Consider more [shields](https://github.com/Ileriayo/markdown-badges) to indicate tech stack at a glance.
+![C#](https://img.shields.io/badge/c%23-%23239120.svg?style=for-the-badge&logo=csharp&logoColor=white)
 
-Opening remarks about the repository.
+Leaflet is a messaging app optimised for privacy and architecturally opposed to corporate-interest enshittification.
+
+Every message, including metadata, is secured against prying eyes using end-to-end post-quantum encryption. Servers are volunteer-run, with robust erasure coding to make sure your chats live on, even if your favourite server dies. Configuration is encrypted, so even physical access to your PC or phone won't give attackers access to your chats or identities.
 
 ## 📋 Prerequisites
 
-Remarks on any requirements for this project, and how to install or configure them.
+You'll need .NET 6 or higher to restore dependencies. See [script/dotnet-install.ps1](./script/dotnet-install.ps1) and [script/dotnet-install.sh](./script/dotnet-install.sh).
 
 ## 🚀 Get started
 
 * Get hooks using `git config core.hooksPath '$GIT_DIR/../hooks'`
 * Restore tools using `dotnet tool restore`
 
-Remarks on how to get started with the repository, e.g. key and core code to look into.
-
 ## ▶️ Run
 
-Remarks on how to run the software.
+Use Visual Studio to run the slnLaunch profile.
 
 ## 🧪 Test
 
@@ -30,16 +30,18 @@ To generate a coverage report, use `dotnet cake --target GenerateCoverage`.
 
 ### 📈 Benchmarks
 
-Remarks on how to benchmark the software.
+To run all benchmarks, use `dotnet cake --target Benchmark`.
+
+This might take a while, so consider adding `--benchmarkFilter **Example**` too.
 
 ## 🛳️ Deploy
 
-Remarks on how to deploy the software, including delivery mechanisms, and who should be informed of new releases and how.
+Instructions TBD!
 
 ## ⚖️ Licensing
 
 Released under the MIT license.
 
-Additional remarks about included software and relevant licensing notices.
+No third party notices apply.
 
 For more information, see [LICENSE.md](./LICENSE.md).

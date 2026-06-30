@@ -1,0 +1,26 @@
+{
+    "files.associations": {
+        "nuget.config": "xml",
+        "Directory.Build.targets": "xml",
+        "*.rsp": "shellscript"
+    },
+
+    "files.exclude": {
+        "**/.git/": true,
+        "**/.vs/": true,
+        "**/bin/": true,
+        "**/obj/": true,
+        "**/TestResults/": true,
+        ".prebootstrap.cache": true,
+    },
+
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.expand": false,
+    "explorer.fileNesting.patterns": {
+        "*.razor": "${capture}.razor.cs, ${capture}.razor.css, ${capture}.razor.js, ${capture}.razor.scss",
+        "*.xaml": "${capture}.xaml.cs",
+        "*.csproj": "${capture}.csproj.User",
+        "*.resx": "${capture}.*.resx",
+        "appsettings.json": "appsettings.*.json"
+    }
+}

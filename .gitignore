@@ -1,0 +1,135 @@
+# Ignore files in git version tracking
+
+# Adapted from:
+#     https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
+
+# User-specific files
+*.sln.docstates
+*.userprefs
+*.csproj.user
+
+# Mono auto generated files
+mono_crash.*
+
+# Build results folders
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual studio config and auto-generated files
+.vs/
+Generated\ Files/
+
+# Test and benchmark results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.VisualState.xml
+TestResult.xml
+nunit-*.xml
+BenchmarkDotNet.Artifacts/
+
+# Code coverage results
+*.coverage
+*.coveragexml
+coveragereport/
+
+# Packages
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+node_modules/
+
+# JetBrains ReSharper and DotCover
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+*.dotCover
+
+# TFS 2012 Local Workspace
+$tf/
+
+# Files built by Visual Studio
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+# but not Directory.Build.rsp, as it configures directory-level build defaults
+!Directory.Build.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+*.log
+*.tlog
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+*.psess
+*.vsp
+*.vspx
+*.sap
+*.e2e
+
+# Other Visual Studio [Code] files
+*.[Cc]ache
+!?*.[Cc]ache/
+Generated_Code/
+*.plg
+*.opt
+*.vbw
+*.vbp
+*.dsw
+*.dsp
+*.ncb
+*.aps
+**/*.HTMLClient/GeneratedArtifacts
+**/*.DesktopClient/GeneratedArtifacts
+**/*.DesktopClient/ModelManifest.xml
+**/*.Server/GeneratedArtifacts
+**/*.Server/ModelManifest.xml
+_Pvt_Extensions
+.localhistory/
+.vshistory/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.history/
+
+# Extended
+FodyWeavers.xsd
+.env

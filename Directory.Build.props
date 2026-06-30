@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <WarningsAsErrors>
+      <!-- Logging parameter count mismatch. We don't want logging to fail silently in this case,
+      but we also don't want it to crash the program. --> CA2017 
+    
+      <!-- Razor element looks like a markup component, but couldn't be resolved. This prevents missing components due to missing using directives, especially after merges. -->
+      RZ10012
+    </WarningsAsErrors>
+    <NoWarn>
+      <!-- Using primary constructors. This prevents us from distinguishing between references to class and references to the constructor. -->
+      IDE0290
+    </NoWarn>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,16 @@
+{
+  "recommendations": [
+    "jetbrains.resharper-code",
+    "yzhang.markdown-all-in-one",
+    "ms-vscode.powershell",
+    "cake-build.cake-vscode",
+    "jasonnutter.vscode-codeowners",
+    "ms-dotnettools.vscode-dotnet-runtime",
+    "ms-azure-devops.azure-pipelines",
+    "ms-azuretools.vscode-azureresourcegroups",
+    "redhat.vscode-xml",
+    "dominicvonk.vscode-resx-editor",
+    "github.copilot-chat",
+    "editorconfig.editorconfig"
+  ]
+}

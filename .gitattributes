@@ -1,0 +1,99 @@
+# Recommended Reading:
+#     1. https://git-scm.com/docs/gitattributes
+#     2. https://github.com/gitattributes/gitattributes
+
+# For unknowns, let git make its best guess, but treat as CRLF
+*                               text=auto eol=crlf
+
+# Treat environment files as LF
+.env                            text eol=lf
+*.env                           text eol=lf
+.env.sample                     text eol=lf
+*.env.sample                    text eol=lf
+
+# Tell difftools to treat "unusual" code files certain ways
+*.cshtml                        text diff=html
+*.razor                         text diff=html
+*.res[wx]                       text diff=xml
+*.DotSettings                   text diff=xml
+*.csproj                        text diff=xml
+*.manifest                      text diff=json
+*.editorconfig                  text diff=json
+
+# Setup diff for document file types
+*.{doc,DOC}                     diff=astextplain
+*.{docx,DOCX}                   diff=astextplain
+*.{dot,DOT}                     diff=astextplain
+*.{pdf,PDF}                     diff=astextplain
+*.{rtf,RTF}                     diff=astextplain
+*.epub                          diff=astextplain
+*.m{d,dx}                       diff=markdown
+*.{t,bibt}ex                    diff=tex
+
+# Treat images as binary
+*.jp{g,eg}                      binary
+*.png                           binary
+*.gif                           binary
+*.ti{f,ff}                      binary
+*.ico                           binary
+*.svg                           binary diff=xml
+*.eps                           binary
+
+# Treat archives as binary
+# Built-in binary attr: [attr]binary -diff -text
+*.[7bglx]z                      binary
+*.t[abglx]z                     binary
+*.[tr]ar                        binary
+*.bz2                           binary
+*.bzip2                         binary
+*.lzma                          binary
+*.tbz2                          binary
+*.Z                             binary
+*.zip                           binary
+*.zst                           binary
+
+# Treat dlls as binary
+*.dll                           binary
+
+# Don't change line endings on patches
+*.patch                         -text
+
+# Treat linux scripts as lf endings
+*.{ba,fi,k,z}sh                 text eol=lf
+*.sh                            text eol=lf
+*.pl                            text eol=lf
+
+# Treat macOS-specific files with lf endings
+*.plist                         text eol=lf
+
+# Exclude git files from exports (see git-archive(1))
+.git{attributes,keep,ignore}    export-ignore
+
+# Binary merge will prevent git from adding diff markers.
+# Diff markers in Visual Studio project/solution files
+# will cause VS to fail to load.
+*.sln                           merge=binary
+*.csproj                        merge=binary
+*.vbproj                        merge=binary
+*.vcxproj                       merge=binary
+*.vcproj                        merge=binary
+*.dbproj                        merge=binary
+*.fsproj                        merge=binary
+*.lsproj                        merge=binary
+*.wixproj                       merge=binary
+*.modelproj                     merge=binary
+*.sqlproj                       merge=binary
+*.wwaproj                       merge=binary
+*.xproj                         merge=binary
+*.props                         merge=binary
+*.filters                       merge=binary
+*.vcxitems                      merge=binary
+
+# Linguist syntax highlighting support
+.vscode/*.json                  linguist-language=JSON-with-Comments
+*.rsp                           linguist-language=shellscript
+**/Directory.Build.props        linguist-language=xml
+**/Directory.Build.targets      linguist-language=xml
+**/nuget.config                 linguist-language=xml
+*.slnx                          linguist-language=xml
+*.slnlaunch                     linguist-language=json

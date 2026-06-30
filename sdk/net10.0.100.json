@@ -1,0 +1,8 @@
+{
+  "sdk": {
+    "version": "10.0.100",
+    "rollForward": "disabled",
+    "allowPrerelease": false,
+    "paths": ["src/", "test/"]
+  }
+}

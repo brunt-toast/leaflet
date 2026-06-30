@@ -9,8 +9,111 @@ using Core.Responses.Messages;
 namespace Api.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class MessageRecoveryTests
 {
+    [TestMethod]
+    public async Task CreateMessages_AssignsUniqueIdsAcrossInstances_ForSameRoom()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'.");
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 3));
+
+            await ConnectNodesAsync(nodes[0], nodes[1]);
+            await ConnectNodesAsync(nodes[0], nodes[2]);
+            await ConnectNodesAsync(nodes[1], nodes[2]);
+
+            await CreateMessageAsync(nodes[0], "room-unique", "cipher-text-a");
+            await CreateMessageAsync(nodes[1], "room-unique", "cipher-text-b");
+
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[2], "room-unique", numberToFetch: 2);
+
+            Assert.AreEqual(2, messages.Messages.Length, await nodes[2].FormatFailureAsync("Expected both messages to be retrievable."));
+            Assert.AreNotEqual(messages.Messages[0].Id, messages.Messages[1].Id, await nodes[2].FormatFailureAsync("Expected logical-clock message IDs to be unique."));
+            Assert.IsTrue(messages.Messages[0].Id < messages.Messages[1].Id, await nodes[2].FormatFailureAsync("Expected message IDs to be sorted ascending."));
+
+            string[] cipherTexts = messages.Messages.Select(message => message.CypherText).OrderBy(value => value).ToArray();
+            string[] expectedCipherTexts = ["cipher-text-a", "cipher-text-b"];
+            CollectionAssert.AreEqual(expectedCipherTexts, cipherTexts);
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task CreateMessages_AdvancesRoomLogicalClock_AfterObservingRemoteMessage()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'.");
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 2));
+
+            await ConnectNodesAsync(nodes[0], nodes[1]);
+
+            await CreateMessageAsync(nodes[0], "room-clock", "cipher-text-a");
+            GetMessagesResponse observed = await GetMessagesAsync(nodes[1], "room-clock", numberToFetch: 1);
+            Assert.AreEqual(1, observed.Messages.Length, await nodes[1].FormatFailureAsync("Expected node 2 to observe the first message."));
+
+            long firstMessageId = observed.Messages[0].Id;
+
+            await CreateMessageAsync(nodes[1], "room-clock", "cipher-text-b");
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[1], "room-clock", numberToFetch: 2);
+
+            Assert.AreEqual(2, messages.Messages.Length, await nodes[1].FormatFailureAsync("Expected two messages after the second write."));
+            Assert.AreEqual(firstMessageId, messages.Messages[0].Id, await nodes[1].FormatFailureAsync("Expected the observed message to remain first."));
+            Assert.IsTrue(messages.Messages[1].Id > firstMessageId, await nodes[1].FormatFailureAsync("Expected the new local message ID to advance past the observed remote message."));
+            string[] expectedCipherTexts = ["cipher-text-a", "cipher-text-b"];
+            CollectionAssert.AreEqual(expectedCipherTexts, messages.Messages.Select(message => message.CypherText).ToArray());
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     [TestMethod]
     public async Task GetMessage_ReconstructsMessageFromRemainingPeers_WhenOriginInstanceIsOffline()
     {
@@ -189,6 +292,37 @@ public sealed class MessageRecoveryTests
             $"Failed to connect '{requester.Name}' to '{receiver.Name}'."));
         Assert.AreEqual(HttpStatusCode.OK, reverseResponse.StatusCode, await requester.FormatFailureAsync(
             $"Failed to connect '{receiver.Name}' to '{requester.Name}'."));
+    }
+
+    private static async Task CreateMessageAsync(ApiNode node, string roomHash, string cipherText)
+    {
+        CreateMessagesRequest createRequest = new()
+        {
+            Messages =
+            [
+                new EncryptedMessageDto
+                {
+                    Id = 0,
+                    RoomHash = roomHash,
+                    SenderPublicKey = "sender-public-key",
+                    Nonce = "nonce",
+                    CypherText = cipherText,
+                    Signature = "signature",
+                },
+            ],
+        };
+
+        using HttpResponseMessage postResponse = await node.Client.PostAsJsonAsync("/api/messages", createRequest);
+        Assert.AreEqual(HttpStatusCode.OK, postResponse.StatusCode, await node.FormatFailureAsync("POST /api/messages failed."));
+    }
+
+    private static async Task<GetMessagesResponse> GetMessagesAsync(ApiNode node, string roomHash, int numberToFetch)
+    {
+        GetMessagesResponse? response = await node.Client.GetFromJsonAsync<GetMessagesResponse>(
+            $"/api/messages?roomHash={Uri.EscapeDataString(roomHash)}&maxId={long.MaxValue}&numberToFetch={numberToFetch}");
+
+        Assert.IsNotNull(response, await node.FormatFailureAsync("GET /api/messages returned no body."));
+        return response;
     }
 
     private static int GetFreeTcpPort()

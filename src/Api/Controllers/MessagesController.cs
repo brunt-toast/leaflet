@@ -13,7 +13,8 @@ namespace Api.Controllers;
 [Route("api/messages")]
 public sealed class MessagesController(
     AppDbContext appContext,
-    IMessageErasureCodingService messageErasureCodingService) : ControllerBase
+    IMessageErasureCodingService messageErasureCodingService,
+    IMessageIdentityService messageIdentityService) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<GetMessagesResponse>(StatusCodes.Status200OK)]
@@ -57,7 +58,7 @@ public sealed class MessagesController(
         CancellationToken cancellationToken)
     {
         EncryptedMessageEntity[] entities = request.Messages
-            .Select(message => new EncryptedMessageEntity
+            .Select(static message => new EncryptedMessageEntity
             {
                 RoomHash = message.RoomHash,
                 SenderPublicKey = message.SenderPublicKey,
@@ -66,6 +67,11 @@ public sealed class MessagesController(
                 Signature = message.Signature,
             })
             .ToArray();
+
+        foreach (EncryptedMessageEntity entity in entities)
+        {
+            entity.Id = await messageIdentityService.CreateMessageIdAsync(entity.RoomHash, cancellationToken);
+        }
 
         await appContext.EncryptedMessages.AddRangeAsync(entities, cancellationToken);
         await appContext.SaveChangesAsync(cancellationToken);

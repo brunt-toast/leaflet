@@ -26,6 +26,7 @@ public class Program
         {
             client.Timeout = TimeSpan.FromSeconds(10);
         });
+        builder.Services.AddScoped<IMessageIdentityService, MessageIdentityService>();
         builder.Services.AddScoped<IPeerSyncService, PeerSyncService>();
         builder.Services.AddScoped<IMessageErasureCodingService, MessageErasureCodingService>();
         builder.Services.AddHostedService<PeerPollingBackgroundService>();

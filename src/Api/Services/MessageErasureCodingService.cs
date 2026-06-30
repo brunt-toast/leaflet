@@ -15,6 +15,7 @@ namespace Api.Services;
 internal sealed class MessageErasureCodingService(
     AppDbContext appContext,
     IHttpClientFactory httpClientFactory,
+    IMessageIdentityService messageIdentityService,
     IOptions<PeerSyncOptions> peerSyncOptions,
     IOptions<ErasureCodingOptions> erasureCodingOptions,
     ILogger<MessageErasureCodingService> logger) : IMessageErasureCodingService
@@ -91,6 +92,9 @@ internal sealed class MessageErasureCodingService(
             return;
         }
 
+        await messageIdentityService.ObserveMessageIdsAsync(
+            recoveredMessages.Select(message => (message.RoomHash, message.Id)),
+            cancellationToken);
         await appContext.EncryptedMessages.AddRangeAsync(recoveredMessages, cancellationToken);
         await appContext.SaveChangesAsync(cancellationToken);
     }
@@ -162,6 +166,10 @@ internal sealed class MessageErasureCodingService(
         {
             return;
         }
+
+        await messageIdentityService.ObserveMessageIdsAsync(
+            request.MessageShards.Select(shard => (shard.RoomHash, shard.MessageId)),
+            cancellationToken);
 
         string roomHash = request.MessageShards[0].RoomHash;
         long[] messageIds = request.MessageShards

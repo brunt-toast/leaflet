@@ -20,6 +20,12 @@ public class Program
         builder.Services.AddOpenApi();
 
         WebApplication app = builder.Build();
+        using (IServiceScope scope = app.Services.CreateScope())
+        {
+            AppDbContext dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            dbContext.Database.EnsureCreated();
+        }
+
         if (app.Environment.IsDevelopment())
         {
             app.MapOpenApi();

@@ -1,8 +1,8 @@
 ﻿using Core.Types;
 
-namespace Api.Dto;
+namespace Core.Dto;
 
-internal class EncryptedMessageDto : IEncryptedMessage
+public class EncryptedMessageDto : IEncryptedMessage
 {
     public long Id { get; init; }
     public string RoomHash { get; init; } = string.Empty;

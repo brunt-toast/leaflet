@@ -1,0 +1,13 @@
+.git
+.vs
+.vscode
+BenchmarkDotNet.Artifacts
+TestResults
+bin
+obj
+**/bin
+**/obj
+coveragereport
+*.db
+*.db-shm
+*.db-wal

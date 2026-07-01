@@ -47,7 +47,11 @@ public class Program
             app.MapOpenApi();
         }
 
-        app.UseHttpsRedirection();
+        if (app.Configuration.GetValue("UseHttpsRedirection", true))
+        {
+            app.UseHttpsRedirection();
+        }
+
         app.UseAuthorization();
         app.MapControllers();
         app.Run();

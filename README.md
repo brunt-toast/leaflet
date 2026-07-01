@@ -11,6 +11,8 @@ Every message, including metadata, is secured against prying eyes using end-to-e
 
 You'll need .NET 6 or higher to restore dependencies. See [script/dotnet-install.ps1](./script/dotnet-install.ps1) and [script/dotnet-install.sh](./script/dotnet-install.sh).
 
+If you want to deploy an instance of the server, the easiest way is to do ith with [docker](docker.com).
+
 ## 🚀 Get started
 
 * Get hooks using `git config core.hooksPath '$GIT_DIR/../hooks'`
@@ -36,9 +38,13 @@ To run all benchmarks, use `dotnet cake --target Benchmark`.
 
 This might take a while, so consider adding `--benchmarkFilter **Example**` too.
 
-## 🛳️ Deploy
+## 🐳 Deploy
 
-Instructions TBD!
+To build and run the API in Linux containers, use `docker compose up --build`.
+
+The API will be available at `http://localhost:5011`, and the SQLite database will be persisted in the named Docker volume `api-data`.
+
+To stop the container, use `docker compose down`.
 
 ## ⚖️ Licensing
 

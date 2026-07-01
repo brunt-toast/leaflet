@@ -1,4 +1,4 @@
-var target = Argument("target", "Run");
+var target = Argument("target", "RunClient");
 var configuration = Argument("configuration", "Release");
 var benchmarkFilter = Argument("benchmarkFilter", "*");
 
@@ -20,11 +20,21 @@ Task("InstallSdk")
         }
     });
 
-Task("Run")
+Task("RunClient")
     .IsDependentOn("InstallSdk")
     .Does(() =>
     {
-        DotNetRun("./src/SampleApp.UI/SampleApp.UI.csproj", new DotNetRunSettings
+        DotNetRun("./src/Tui/Tui.csproj", new DotNetRunSettings
+        {
+            Configuration = configuration,
+        });
+    });
+
+Task("RunServer")
+    .IsDependentOn("InstallSdk")
+    .Does(() =>
+    {
+        DotNetRun("./src/Api/Api.csproj", new DotNetRunSettings
         {
             Configuration = configuration,
         });

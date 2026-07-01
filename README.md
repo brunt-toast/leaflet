@@ -18,7 +18,9 @@ You'll need .NET 6 or higher to restore dependencies. See [script/dotnet-install
 
 ## ▶️ Run
 
-Use Visual Studio to run the slnLaunch profile.
+To start the client, use `dotnet cake --target RunClient`.
+
+To start the server, use `dotnet cake --target RunServer`.
 
 ## 🧪 Test
 

@@ -4,7 +4,7 @@ internal sealed class TuiAppConfig
 {
     public TuiCoreConfig Core { get; set; } = new();
     public IReadOnlyDictionary<string, IdentityConfig> Identities { get; set; } = new Dictionary<string, IdentityConfig>();
-    public IReadOnlyDictionary<string, ServerConfig> Servers { get; set; } = new Dictionary<string, ServerConfig>();
+    public ServerClusterConfig Servers { get; set; } = new();
     public RoomGroupNode RoomsRoot { get; set; } = new()
     {
         Name = "rooms",
@@ -30,6 +30,12 @@ internal sealed class ServerConfig
 {
     public string Name { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
+}
+
+internal sealed class ServerClusterConfig
+{
+    public ServerConfig Main { get; init; } = new();
+    public IReadOnlyList<ServerConfig> Backups { get; init; } = [];
 }
 
 internal abstract class RoomTreeNode

@@ -9,6 +9,9 @@ private_key = '''{"mldsa":"MIITXgIBADALBglghkgBZQMEAxMEghNKMIITRgQgkt5C5ohBoGx80
 
 [servers.main]
 url = "http://localhost:5011"
+backup_urls = [
+  "http://localhost:5012",
+]
 
 [rooms.Group1.Room1]
 key = "Nah-ru Xela Bhak Cali Squill"

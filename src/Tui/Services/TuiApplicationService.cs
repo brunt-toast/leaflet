@@ -10,6 +10,7 @@ namespace Tui.Services;
 internal sealed class TuiApplicationService(
     IOptions<TuiAppConfig> configOptions,
     MessagingApiClientService apiClient,
+    ServerDiscoveryService serverDiscoveryService,
     IChatCryptoService cryptoService,
     IAnsiConsole console)
 {
@@ -18,7 +19,7 @@ internal sealed class TuiApplicationService(
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        ServerConfig server = ResolveServer();
+        ServerConfig server = await ResolveServerAsync(cancellationToken);
         IReadOnlyList<RoomListEntry> roomEntries = BuildRoomEntries(_config.RoomsRoot);
         RoomListEntry? initiallySelectedRoom = roomEntries.FirstOrDefault(static entry => entry.Room is not null);
 
@@ -52,6 +53,7 @@ internal sealed class TuiApplicationService(
                 DateTimeOffset now = DateTimeOffset.UtcNow;
                 if (now >= nextRefreshAt)
                 {
+                    server = await ResolveServerAsync(cancellationToken);
                     roomState = await RefreshRoomAsync(selectedRoom, roomState, server, cancellationToken);
                     lastRefreshAt = DateTimeOffset.UtcNow;
                     nextRefreshAt = lastRefreshAt.AddSeconds(_config.Core.RefreshIntervalSeconds);
@@ -91,12 +93,22 @@ internal sealed class TuiApplicationService(
         }
     }
 
-    private ServerConfig ResolveServer()
+    private async Task<ServerConfig> ResolveServerAsync(CancellationToken cancellationToken)
     {
-        return _config.Servers
-            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(pair => pair.Value)
-            .First();
+        if (await serverDiscoveryService.IsDiscoverableAsync(_config.Servers.Main, cancellationToken))
+        {
+            return _config.Servers.Main;
+        }
+
+        foreach (ServerConfig backup in _config.Servers.Backups)
+        {
+            if (await serverDiscoveryService.IsDiscoverableAsync(backup, cancellationToken))
+            {
+                return backup;
+            }
+        }
+
+        return _config.Servers.Main;
     }
 
     private async Task<InputResult> HandleInputAsync(
@@ -221,6 +233,7 @@ internal sealed class TuiApplicationService(
 
         try
         {
+            server = await ResolveServerAsync(cancellationToken);
             EncryptedMessageDto dto = cryptoService.CreateEncryptedMessage(room, identity, text);
             await apiClient.SendMessageAsync(server, dto, cancellationToken);
             composeBuffer.Clear();

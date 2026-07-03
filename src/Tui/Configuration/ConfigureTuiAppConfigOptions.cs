@@ -45,7 +45,7 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
         return identities;
     }
 
-    private IReadOnlyDictionary<string, ServerConfig> BuildServers()
+    private ServerClusterConfig BuildServers()
     {
         IConfigurationSection serversSection = configuration.GetSection("servers");
         if (!serversSection.Exists())
@@ -53,22 +53,38 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
             throw new InvalidOperationException("config.toml must contain a [servers] section.");
         }
 
-        Dictionary<string, ServerConfig> servers = [];
-        foreach (IConfigurationSection serverSection in serversSection.GetChildren())
+        IConfigurationSection mainServerSection = serversSection.GetSection("main");
+        if (!mainServerSection.Exists())
         {
-            servers[serverSection.Key] = new ServerConfig
+            throw new InvalidOperationException("config.toml must contain a [servers.main] section.");
+        }
+
+        List<ServerConfig> backups = [];
+        string[] backupUrls = mainServerSection.GetSection("backup_urls").Get<string[]>() ?? [];
+        for (int index = 0; index < backupUrls.Length; index++)
+        {
+            string backupUrl = backupUrls[index];
+            if (string.IsNullOrWhiteSpace(backupUrl))
             {
-                Name = serverSection.Key,
-                Url = GetRequiredValue(serverSection, "url", $"servers.{serverSection.Key}")
-            };
+                throw new InvalidOperationException($"Missing required string 'backup_urls[{index}]' at [servers.main].");
+            }
+
+            backups.Add(new ServerConfig
+            {
+                Name = $"backup-{index + 1}",
+                Url = backupUrl
+            });
         }
 
-        if (servers.Count == 0)
+        return new ServerClusterConfig
         {
-            throw new InvalidOperationException("config.toml must define at least one server.");
-        }
-
-        return servers;
+            Main = new ServerConfig
+            {
+                Name = "main",
+                Url = GetRequiredValue(mainServerSection, "url", "servers.main")
+            },
+            Backups = backups
+        };
     }
 
     private RoomGroupNode BuildRooms()

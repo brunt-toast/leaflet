@@ -48,6 +48,7 @@ internal static class Program
         builder.Services.AddSingleton<CompositeIdentityGeneratorService>();
         builder.Services.AddSingleton<IChatCryptoService, ChatCryptoService>();
         builder.Services.AddHttpClient<MessagingApiClientService>();
+        builder.Services.AddHttpClient<ServerDiscoveryService>();
         builder.Services.AddSingleton<TuiApplicationService>();
 
         builder.Services.AddSingleton<NameOption>();

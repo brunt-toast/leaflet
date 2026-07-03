@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text;
 using Core.Dto;
 using Core.Requests.Messages;
@@ -8,7 +7,7 @@ using Tui.Configuration;
 
 namespace Tui.Services;
 
-internal sealed class MessagingApiClient(HttpClient httpClient)
+internal sealed class MessagingApiClientService(HttpClient httpClient)
 {
     public async Task<IReadOnlyList<EncryptedMessageDto>> GetMessagesAsync(
         ServerConfig server,
@@ -32,7 +31,7 @@ internal sealed class MessagingApiClient(HttpClient httpClient)
         string requestUri = $"{server.Url.TrimEnd('/')}/api/messages";
         CreateMessagesRequest request = new()
         {
-            Messages = [message],
+            Messages = [message]
         };
 
         string requestBody = JsonConvert.SerializeObject(request);

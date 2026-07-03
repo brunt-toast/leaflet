@@ -1,7 +1,6 @@
 using System.Text;
 using Core.Dto;
 using Newtonsoft.Json;
-using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
@@ -31,7 +30,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
         {
             SenderName = identity.Name,
             Text = text,
-            SentAtUtc = DateTimeOffset.UtcNow,
+            SentAtUtc = DateTimeOffset.UtcNow
         };
 
         byte[] plaintext = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload));
@@ -47,7 +46,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
             SenderPublicKey = identity.PublicKey,
             Nonce = Convert.ToBase64String(nonce),
             CypherText = Convert.ToBase64String(cipherText),
-            Signature = signature,
+            Signature = signature
         };
     }
 
@@ -75,7 +74,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
                 Sender = payload.SenderName,
                 Body = payload.Text,
                 IsVerified = isVerified,
-                IsError = false,
+                IsError = false
             };
         }
         catch (Exception ex)
@@ -86,7 +85,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
                 Sender = "system",
                 Body = ex.Message,
                 IsVerified = false,
-                IsError = true,
+                IsError = true
             };
         }
     }
@@ -98,7 +97,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
             roomHash,
             nonce = Convert.ToBase64String(nonce),
             cypherText = Convert.ToBase64String(cipherText),
-            senderPublicKey,
+            senderPublicKey
         });
 
         return Encoding.UTF8.GetBytes(canonical);
@@ -124,7 +123,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
         CompositeSignatureEnvelope signature = new()
         {
             Mldsa = Convert.ToBase64String(mldsaSigner.GenerateSignature()),
-            SlhDsa = Convert.ToBase64String(slhDsaSigner.GenerateSignature()),
+            SlhDsa = Convert.ToBase64String(slhDsaSigner.GenerateSignature())
         };
 
         return JsonConvert.SerializeObject(signature);
@@ -211,12 +210,9 @@ internal sealed class ChatCryptoService : IChatCryptoService
     {
         StringBuilder builder = new(value.Length);
 
-        foreach (char character in value)
+        foreach (char character in value.Where(character => !char.IsWhiteSpace(character)))
         {
-            if (!char.IsWhiteSpace(character))
-            {
-                builder.Append(character);
-            }
+            builder.Append(character);
         }
 
         return builder.ToString();

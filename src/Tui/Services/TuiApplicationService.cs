@@ -1,25 +1,25 @@
 using System.Text;
 using Core.Dto;
+using Microsoft.Extensions.Options;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 using Tui.Configuration;
-using Tui.Services;
 
-namespace Tui;
+namespace Tui.Services;
 
-internal sealed class TuiApplication(
-    TuiAppConfig config,
-    TuiLaunchOptions launchOptions,
-    MessagingApiClient apiClient,
+internal sealed class TuiApplicationService(
+    IOptions<TuiAppConfig> configOptions,
+    MessagingApiClientService apiClient,
     IChatCryptoService cryptoService,
     IAnsiConsole console)
 {
-    private static readonly TimeSpan InputPollInterval = TimeSpan.FromMilliseconds(40);
+    private readonly TuiAppConfig _config = configOptions.Value;
+    private static readonly TimeSpan s_inputPollInterval = TimeSpan.FromMilliseconds(40);
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         ServerConfig server = ResolveServer();
-        IReadOnlyList<RoomListEntry> roomEntries = BuildRoomEntries(config.RoomsRoot);
+        IReadOnlyList<RoomListEntry> roomEntries = BuildRoomEntries(_config.RoomsRoot);
         RoomListEntry? initiallySelectedRoom = roomEntries.FirstOrDefault(static entry => entry.Room is not null);
 
         if (initiallySelectedRoom?.Room is null)
@@ -54,7 +54,7 @@ internal sealed class TuiApplication(
                 {
                     roomState = await RefreshRoomAsync(selectedRoom, roomState, server, cancellationToken);
                     lastRefreshAt = DateTimeOffset.UtcNow;
-                    nextRefreshAt = lastRefreshAt.AddSeconds(config.Core.RefreshIntervalSeconds);
+                    nextRefreshAt = lastRefreshAt.AddSeconds(_config.Core.RefreshIntervalSeconds);
                     needsRender = true;
                 }
 
@@ -78,7 +78,7 @@ internal sealed class TuiApplication(
                     needsRender = false;
                 }
 
-                await Task.Delay(InputPollInterval, cancellationToken);
+                await Task.Delay(s_inputPollInterval, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -93,17 +93,7 @@ internal sealed class TuiApplication(
 
     private ServerConfig ResolveServer()
     {
-        if (!string.IsNullOrWhiteSpace(launchOptions.ServerName))
-        {
-            if (config.Servers.TryGetValue(launchOptions.ServerName, out ServerConfig? configuredServer))
-            {
-                return configuredServer;
-            }
-
-            throw new InvalidOperationException($"Unknown server '{launchOptions.ServerName}'.");
-        }
-
-        return config.Servers
+        return _config.Servers
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => pair.Value)
             .First();
@@ -157,7 +147,7 @@ internal sealed class TuiApplication(
                         composeBuffer.Clear();
                         roomState = roomState with
                         {
-                            Status = "Draft cleared.",
+                            Status = "Draft cleared."
                         };
                         handled = true;
                     }
@@ -189,7 +179,7 @@ internal sealed class TuiApplication(
             IReadOnlyList<EncryptedMessageDto> messages = await apiClient.GetMessagesAsync(
                 server,
                 roomHash,
-                config.Core.HistoryCount,
+                _config.Core.HistoryCount,
                 cancellationToken);
 
             IReadOnlyList<RenderedMessage> renderedMessages = messages
@@ -203,7 +193,7 @@ internal sealed class TuiApplication(
             return currentState with
             {
                 Error = ex.Message,
-                Status = "Refresh failed.",
+                Status = "Refresh failed."
             };
         }
     }
@@ -215,7 +205,7 @@ internal sealed class TuiApplication(
         ServerConfig server,
         CancellationToken cancellationToken)
     {
-        if (!config.Identities.TryGetValue(room.IdentityName, out IdentityConfig? identity))
+        if (!_config.Identities.TryGetValue(room.IdentityName, out IdentityConfig? identity))
         {
             throw new InvalidOperationException($"Room '{room.Path}' references unknown identity '{room.IdentityName}'.");
         }
@@ -225,7 +215,7 @@ internal sealed class TuiApplication(
         {
             return currentState with
             {
-                Status = "Message cannot be empty.",
+                Status = "Message cannot be empty."
             };
         }
 
@@ -236,8 +226,8 @@ internal sealed class TuiApplication(
             composeBuffer.Clear();
             return currentState with
             {
-                Error = null,
                 Status = "Message sent.",
+                Error = null
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -245,7 +235,7 @@ internal sealed class TuiApplication(
             return currentState with
             {
                 Error = ex.Message,
-                Status = "Send failed.",
+                Status = "Send failed."
             };
         }
     }
@@ -258,9 +248,9 @@ internal sealed class TuiApplication(
         ServerConfig server,
         DateTimeOffset lastRefreshAt)
     {
-        IdentityConfig identity = config.Identities[selectedRoom.IdentityName];
+        IdentityConfig identity = _config.Identities[selectedRoom.IdentityName];
 
-        Layout root = new Layout("Root");
+        Layout root = new("Root");
         root.SplitColumns(
             new Layout("Rooms").Size(32),
             new Layout("Main"));
@@ -285,18 +275,17 @@ internal sealed class TuiApplication(
     {
         List<IRenderable> rows = [];
 
-        foreach (RoomListEntry entry in roomEntries)
+        foreach ((string label, int depth, RoomLeafNode? roomLeafNode) in roomEntries)
         {
-            string indent = new(' ', entry.Depth * 2);
-            string label = entry.Name;
+            string indent = new(' ', depth * 2);
 
-            if (entry.Room is null)
+            if (roomLeafNode is null)
             {
                 rows.Add(new Text(indent + label, new Style(Color.Aqua)));
                 continue;
             }
 
-            bool isSelected = entry.Room.Path == selectedRoom.Path;
+            bool isSelected = roomLeafNode.Path == selectedRoom.Path;
             string selectedPrefix = isSelected ? "> " : "  ";
             Style rowStyle = isSelected
                 ? new Style(Color.Black, Color.Yellow)
@@ -308,7 +297,7 @@ internal sealed class TuiApplication(
         {
             Header = new PanelHeader("Rooms"),
             Border = BoxBorder.Rounded,
-            Expand = true,
+            Expand = true
         };
     }
 
@@ -346,7 +335,7 @@ internal sealed class TuiApplication(
         {
             Header = new PanelHeader("Room"),
             Border = BoxBorder.Rounded,
-            Expand = true,
+            Expand = true
         };
     }
 
@@ -358,7 +347,7 @@ internal sealed class TuiApplication(
             {
                 Header = new PanelHeader("Chat"),
                 Border = BoxBorder.Rounded,
-                Expand = true,
+                Expand = true
             };
         }
 
@@ -368,7 +357,7 @@ internal sealed class TuiApplication(
             {
                 Header = new PanelHeader("Chat"),
                 Border = BoxBorder.Rounded,
-                Expand = true,
+                Expand = true
             };
         }
 
@@ -390,7 +379,7 @@ internal sealed class TuiApplication(
         {
             Header = new PanelHeader("Chat"),
             Border = BoxBorder.Rounded,
-            Expand = true,
+            Expand = true
         };
     }
 
@@ -405,7 +394,7 @@ internal sealed class TuiApplication(
         {
             Header = new PanelHeader("Compose"),
             Border = BoxBorder.Rounded,
-            Expand = true,
+            Expand = true
         };
     }
 
@@ -422,20 +411,21 @@ internal sealed class TuiApplication(
 
     private static void AddEntries(RoomTreeNode node, int depth, IList<RoomListEntry> entries)
     {
-        if (node is RoomGroupNode group)
+        switch (node)
         {
-            entries.Add(new RoomListEntry(group.Name, depth, null));
-            foreach (RoomTreeNode child in group.Children)
+            case RoomGroupNode group:
             {
-                AddEntries(child, depth + 1, entries);
+                entries.Add(new RoomListEntry(group.Name, depth, null));
+                foreach (RoomTreeNode child in group.Children)
+                {
+                    AddEntries(child, depth + 1, entries);
+                }
+
+                return;
             }
-
-            return;
-        }
-
-        if (node is RoomLeafNode room)
-        {
-            entries.Add(new RoomListEntry(room.Name, depth, room));
+            case RoomLeafNode room:
+                entries.Add(new RoomListEntry(room.Name, depth, room));
+                break;
         }
     }
 

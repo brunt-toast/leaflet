@@ -2,10 +2,15 @@ namespace Tui.Configuration;
 
 internal sealed class TuiAppConfig
 {
-    public required TuiCoreConfig Core { get; init; }
-    public required IReadOnlyDictionary<string, IdentityConfig> Identities { get; init; }
-    public required IReadOnlyDictionary<string, ServerConfig> Servers { get; init; }
-    public required RoomGroupNode RoomsRoot { get; init; }
+    public TuiCoreConfig Core { get; set; } = new();
+    public IReadOnlyDictionary<string, IdentityConfig> Identities { get; set; } = new Dictionary<string, IdentityConfig>();
+    public IReadOnlyDictionary<string, ServerConfig> Servers { get; set; } = new Dictionary<string, ServerConfig>();
+    public RoomGroupNode RoomsRoot { get; set; } = new()
+    {
+        Name = "rooms",
+        Path = "rooms",
+        Children = []
+    };
 }
 
 internal sealed class TuiCoreConfig
@@ -16,30 +21,30 @@ internal sealed class TuiCoreConfig
 
 internal sealed class IdentityConfig
 {
-    public required string Name { get; init; }
-    public required string PublicKey { get; init; }
-    public required string PrivateKey { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string PublicKey { get; init; } = string.Empty;
+    public string PrivateKey { get; init; } = string.Empty;
 }
 
 internal sealed class ServerConfig
 {
-    public required string Name { get; init; }
-    public required string Url { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string Url { get; init; } = string.Empty;
 }
 
 internal abstract class RoomTreeNode
 {
-    public required string Name { get; init; }
-    public required string Path { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string Path { get; init; } = string.Empty;
 }
 
 internal sealed class RoomGroupNode : RoomTreeNode
 {
-    public required IReadOnlyList<RoomTreeNode> Children { get; init; }
+    public IReadOnlyList<RoomTreeNode> Children { get; init; } = [];
 }
 
 internal sealed class RoomLeafNode : RoomTreeNode
 {
-    public required string Key { get; init; }
-    public required string IdentityName { get; init; }
+    public string Key { get; init; } = string.Empty;
+    public string IdentityName { get; init; } = string.Empty;
 }

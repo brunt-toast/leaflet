@@ -8,7 +8,7 @@ using Org.BouncyCastle.X509;
 
 namespace Tui.Services;
 
-internal sealed class CompositeIdentityGenerator
+internal sealed class CompositeIdentityGeneratorService
 {
     public CompositeIdentity Generate(string name)
     {
@@ -25,20 +25,20 @@ internal sealed class CompositeIdentityGenerator
         CompositePublicKeyEnvelope publicEnvelope = new()
         {
             Mldsa = Convert.ToBase64String(SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(mldsaKeyPair.Public).GetEncoded()),
-            SlhDsa = Convert.ToBase64String(SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(slhDsaKeyPair.Public).GetEncoded()),
+            SlhDsa = Convert.ToBase64String(SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(slhDsaKeyPair.Public).GetEncoded())
         };
 
         CompositePrivateKeyEnvelope privateEnvelope = new()
         {
             Mldsa = Convert.ToBase64String(PrivateKeyInfoFactory.CreatePrivateKeyInfo(mldsaKeyPair.Private).GetEncoded()),
-            SlhDsa = Convert.ToBase64String(PrivateKeyInfoFactory.CreatePrivateKeyInfo(slhDsaKeyPair.Private).GetEncoded()),
+            SlhDsa = Convert.ToBase64String(PrivateKeyInfoFactory.CreatePrivateKeyInfo(slhDsaKeyPair.Private).GetEncoded())
         };
 
         return new CompositeIdentity
         {
             Name = name,
             PublicKeyJson = JsonConvert.SerializeObject(publicEnvelope),
-            PrivateKeyJson = JsonConvert.SerializeObject(privateEnvelope),
+            PrivateKeyJson = JsonConvert.SerializeObject(privateEnvelope)
         };
     }
 }

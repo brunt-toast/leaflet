@@ -2,6 +2,8 @@ using Api.Benchmarks.Infrastructure;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
 using Core.Responses.Messages;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Api.Benchmarks;
 
@@ -36,14 +38,14 @@ public class MessageRetrievalBenchmarks
     [IterationSetup(Target = nameof(ApiFullFlowKnownMessage))]
     public void SetupKnownMessageAsync()
     {
-        _knownRoomHash = $"known-{Interlocked.Increment(ref _knownCounter)}";
+        _knownRoomHash = CreateRoomHash($"known-{Interlocked.Increment(ref _knownCounter)}");
         _knownMessageId = _cluster!.CreateMessageAsync(0, _knownRoomHash).GetAwaiter().GetResult();
     }
 
     [IterationSetup(Target = nameof(ApiFullFlowReconstructedMessage))]
     public void SetupReconstructedMessageAsync()
     {
-        _reconstructRoomHash = $"reconstruct-{Interlocked.Increment(ref _reconstructCounter)}";
+        _reconstructRoomHash = CreateRoomHash($"reconstruct-{Interlocked.Increment(ref _reconstructCounter)}");
         _reconstructMessageId = _cluster!.CreateMessageAsync(0, _reconstructRoomHash).GetAwaiter().GetResult();
     }
 
@@ -57,5 +59,10 @@ public class MessageRetrievalBenchmarks
     public async Task<GetMessagesResponse> ApiFullFlowReconstructedMessage()
     {
         return await _cluster!.GetMessagesAsync(1, _reconstructRoomHash!, _reconstructMessageId);
+    }
+
+    private static string CreateRoomHash(string value)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 }

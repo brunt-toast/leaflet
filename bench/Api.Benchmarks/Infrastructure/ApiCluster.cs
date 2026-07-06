@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Core.Dto;
 using Core.Requests.Messages;
 using Core.Responses.Messages;
@@ -9,6 +12,9 @@ namespace Api.Benchmarks.Infrastructure;
 
 internal sealed class ApiCluster : IAsyncDisposable
 {
+    private static readonly string SampleSenderPublicKey = CreateCompositeEnvelope("sender-public-key-mldsa", "sender-public-key-slhdsa");
+    private static readonly string SampleSignature = CreateCompositeEnvelope("signature-mldsa", "signature-slhdsa");
+    private static readonly string SampleNonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray());
     private readonly string _rootDirectory;
 
     private ApiCluster(string rootDirectory, ApiNode[] nodes)
@@ -77,10 +83,10 @@ internal sealed class ApiCluster : IAsyncDisposable
                 {
                     Id = 0,
                     RoomHash = roomHash,
-                    SenderPublicKey = "sender-public-key",
-                    Nonce = "nonce",
-                    CypherText = "cipher-text",
-                    Signature = "signature",
+                    SenderPublicKey = SampleSenderPublicKey,
+                    Nonce = SampleNonce,
+                    CypherText = CreateCipherText("cipher-text"),
+                    Signature = SampleSignature,
                 },
             ],
         };
@@ -181,5 +187,19 @@ internal sealed class ApiCluster : IAsyncDisposable
         }
 
         throw new InvalidOperationException("Could not locate the solution root.");
+    }
+
+    private static string CreateCipherText(string value)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    }
+
+    private static string CreateCompositeEnvelope(string firstValue, string secondValue)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(firstValue)),
+            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(secondValue))
+        });
     }
 }

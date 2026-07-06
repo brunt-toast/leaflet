@@ -3,6 +3,9 @@ using Api.Entities;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using AppDbContext = Api.Context.AppContext;
 
 namespace Api.Benchmarks;
@@ -12,6 +15,9 @@ namespace Api.Benchmarks;
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
 public class MessageCreateBenchmarks
 {
+    private static readonly string SampleSenderPublicKey = CreateCompositeEnvelope("sender-public-key-mldsa", "sender-public-key-slhdsa");
+    private static readonly string SampleSignature = CreateCompositeEnvelope("signature-mldsa", "signature-slhdsa");
+    private static readonly string SampleNonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray());
     private ApiCluster? _cluster;
     private string? _dbPath;
     private long _messageCounter;
@@ -67,7 +73,7 @@ public class MessageCreateBenchmarks
     [Benchmark(Description = "Message creation (API - full flow)")]
     public async Task ApiFullFlow()
     {
-        string roomHash = $"create-api-{Interlocked.Increment(ref _messageCounter)}";
+        string roomHash = CreateRoomHash($"create-api-{Interlocked.Increment(ref _messageCounter)}");
         await _cluster!.CreateMessageAsync(0, roomHash);
     }
 
@@ -77,11 +83,11 @@ public class MessageCreateBenchmarks
         using AppDbContext context = CreateDbContext(_dbPath!);
         EncryptedMessageEntity entity = new()
         {
-            RoomHash = $"create-db-{Interlocked.Increment(ref _messageCounter)}",
-            SenderPublicKey = "sender-public-key",
-            Nonce = "nonce",
-            CypherText = "cipher-text",
-            Signature = "signature",
+            RoomHash = CreateRoomHash($"create-db-{Interlocked.Increment(ref _messageCounter)}"),
+            SenderPublicKey = SampleSenderPublicKey,
+            Nonce = SampleNonce,
+            CypherText = CreateCipherText("cipher-text"),
+            Signature = SampleSignature,
         };
 
         await context.EncryptedMessages.AddAsync(entity);
@@ -95,5 +101,24 @@ public class MessageCreateBenchmarks
             .Options;
 
         return new AppDbContext(options);
+    }
+
+    private static string CreateRoomHash(string value)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static string CreateCipherText(string value)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    }
+
+    private static string CreateCompositeEnvelope(string firstValue, string secondValue)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(firstValue)),
+            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(secondValue))
+        });
     }
 }

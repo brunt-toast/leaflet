@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Api.Responses;
 using Core.Dto;
 using Core.Requests.Messages;
@@ -13,6 +16,10 @@ namespace Api.Tests;
 [DoNotParallelize]
 public sealed class MessageRecoveryTests
 {
+    private static readonly string SampleSenderPublicKey = CreateCompositeEnvelope("sender-public-key-mldsa", "sender-public-key-slhdsa");
+    private static readonly string SampleSignature = CreateCompositeEnvelope("signature-mldsa", "signature-slhdsa");
+    private static readonly string SampleNonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray());
+
     [TestMethod]
     public async Task CreateMessages_AssignsUniqueIdsAcrossInstances_ForSameRoom()
     {
@@ -31,17 +38,21 @@ public sealed class MessageRecoveryTests
             await ConnectNodesAsync(nodes[0], nodes[2]);
             await ConnectNodesAsync(nodes[1], nodes[2]);
 
-            await CreateMessageAsync(nodes[0], "room-unique", "cipher-text-a");
-            await CreateMessageAsync(nodes[1], "room-unique", "cipher-text-b");
+            string roomHash = CreateRoomHash("room-unique");
+            string expectedCipherTextA = CreateCipherText("cipher-text-a");
+            string expectedCipherTextB = CreateCipherText("cipher-text-b");
 
-            GetMessagesResponse messages = await GetMessagesAsync(nodes[2], "room-unique", numberToFetch: 2);
+            await CreateMessageAsync(nodes[0], roomHash, expectedCipherTextA);
+            await CreateMessageAsync(nodes[1], roomHash, expectedCipherTextB);
+
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[2], roomHash, numberToFetch: 2);
 
             Assert.AreEqual(2, messages.Messages.Length, await nodes[2].FormatFailureAsync("Expected both messages to be retrievable."));
             Assert.AreNotEqual(messages.Messages[0].Id, messages.Messages[1].Id, await nodes[2].FormatFailureAsync("Expected logical-clock message IDs to be unique."));
             Assert.IsTrue(messages.Messages[0].Id < messages.Messages[1].Id, await nodes[2].FormatFailureAsync("Expected message IDs to be sorted ascending."));
 
             string[] cipherTexts = messages.Messages.Select(message => message.CypherText).OrderBy(value => value).ToArray();
-            string[] expectedCipherTexts = ["cipher-text-a", "cipher-text-b"];
+            string[] expectedCipherTexts = new[] { expectedCipherTextA, expectedCipherTextB }.OrderBy(value => value).ToArray();
             CollectionAssert.AreEqual(expectedCipherTexts, cipherTexts);
         }
         finally
@@ -80,19 +91,23 @@ public sealed class MessageRecoveryTests
 
             await ConnectNodesAsync(nodes[0], nodes[1]);
 
-            await CreateMessageAsync(nodes[0], "room-clock", "cipher-text-a");
-            GetMessagesResponse observed = await GetMessagesAsync(nodes[1], "room-clock", numberToFetch: 1);
+            string roomHash = CreateRoomHash("room-clock");
+            string expectedCipherTextA = CreateCipherText("cipher-text-a");
+            string expectedCipherTextB = CreateCipherText("cipher-text-b");
+
+            await CreateMessageAsync(nodes[0], roomHash, expectedCipherTextA);
+            GetMessagesResponse observed = await GetMessagesAsync(nodes[1], roomHash, numberToFetch: 1);
             Assert.AreEqual(1, observed.Messages.Length, await nodes[1].FormatFailureAsync("Expected node 2 to observe the first message."));
 
             long firstMessageId = observed.Messages[0].Id;
 
-            await CreateMessageAsync(nodes[1], "room-clock", "cipher-text-b");
-            GetMessagesResponse messages = await GetMessagesAsync(nodes[1], "room-clock", numberToFetch: 2);
+            await CreateMessageAsync(nodes[1], roomHash, expectedCipherTextB);
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[1], roomHash, numberToFetch: 2);
 
             Assert.AreEqual(2, messages.Messages.Length, await nodes[1].FormatFailureAsync("Expected two messages after the second write."));
             Assert.AreEqual(firstMessageId, messages.Messages[0].Id, await nodes[1].FormatFailureAsync("Expected the observed message to remain first."));
             Assert.IsTrue(messages.Messages[1].Id > firstMessageId, await nodes[1].FormatFailureAsync("Expected the new local message ID to advance past the observed remote message."));
-            string[] expectedCipherTexts = ["cipher-text-a", "cipher-text-b"];
+            string[] expectedCipherTexts = [expectedCipherTextA, expectedCipherTextB];
             CollectionAssert.AreEqual(expectedCipherTexts, messages.Messages.Select(message => message.CypherText).ToArray());
         }
         finally
@@ -136,6 +151,8 @@ public sealed class MessageRecoveryTests
             await ConnectNodesAsync(nodes[1], nodes[3]);
             await ConnectNodesAsync(nodes[2], nodes[3]);
 
+            string roomHash = CreateRoomHash("room-a");
+            string cipherText = CreateCipherText("cipher-text");
             CreateMessagesRequest createRequest = new()
             {
                 Messages =
@@ -143,11 +160,11 @@ public sealed class MessageRecoveryTests
                     new EncryptedMessageDto
                     {
                         Id = 0,
-                        RoomHash = "room-a",
-                        SenderPublicKey = "sender-public-key",
-                        Nonce = "nonce",
-                        CypherText = "cipher-text",
-                        Signature = "signature",
+                        RoomHash = roomHash,
+                        SenderPublicKey = SampleSenderPublicKey,
+                        Nonce = SampleNonce,
+                        CypherText = cipherText,
+                        Signature = SampleSignature,
                     },
                 ],
             };
@@ -158,17 +175,17 @@ public sealed class MessageRecoveryTests
             await nodes[0].StopAsync();
 
             GetMessagesResponse? getResponse = await nodes[1].Client.GetFromJsonAsync<GetMessagesResponse>(
-                "/api/messages?roomHash=room-a&maxId=9223372036854775807&numberToFetch=1");
+                $"/api/messages?roomHash={Uri.EscapeDataString(roomHash)}&maxId=9223372036854775807&numberToFetch=1");
 
             Assert.IsNotNull(getResponse, await nodes[1].FormatFailureAsync("GET /api/messages returned no body."));
             Assert.AreEqual(1, getResponse.Messages.Length, await nodes[1].FormatFailureAsync("Expected exactly one reconstructed message."));
 
             EncryptedMessageDto message = getResponse.Messages[0];
-            Assert.AreEqual("room-a", message.RoomHash);
-            Assert.AreEqual("sender-public-key", message.SenderPublicKey);
-            Assert.AreEqual("nonce", message.Nonce);
-            Assert.AreEqual("cipher-text", message.CypherText);
-            Assert.AreEqual("signature", message.Signature);
+            Assert.AreEqual(roomHash, message.RoomHash);
+            Assert.AreEqual(SampleSenderPublicKey, message.SenderPublicKey);
+            Assert.AreEqual(SampleNonce, message.Nonce);
+            Assert.AreEqual(cipherText, message.CypherText);
+            Assert.AreEqual(SampleSignature, message.Signature);
         }
         finally
         {
@@ -212,6 +229,8 @@ public sealed class MessageRecoveryTests
                 }
             }
 
+            string roomHash = CreateRoomHash("room-b");
+            string cipherText = CreateCipherText("cipher-text");
             CreateMessagesRequest createRequest = new()
             {
                 Messages =
@@ -219,11 +238,11 @@ public sealed class MessageRecoveryTests
                     new EncryptedMessageDto
                     {
                         Id = 0,
-                        RoomHash = "room-b",
-                        SenderPublicKey = "sender-public-key",
-                        Nonce = "nonce",
-                        CypherText = "cipher-text",
-                        Signature = "signature",
+                        RoomHash = roomHash,
+                        SenderPublicKey = SampleSenderPublicKey,
+                        Nonce = SampleNonce,
+                        CypherText = cipherText,
+                        Signature = SampleSignature,
                     },
                 ],
             };
@@ -237,7 +256,7 @@ public sealed class MessageRecoveryTests
             await nodes[4].StopAsync();
 
             GetMessagesResponse? getResponse = await nodes[1].Client.GetFromJsonAsync<GetMessagesResponse>(
-                "/api/messages?roomHash=room-b&maxId=9223372036854775807&numberToFetch=1");
+                $"/api/messages?roomHash={Uri.EscapeDataString(roomHash)}&maxId=9223372036854775807&numberToFetch=1");
 
             Assert.IsNotNull(getResponse, await nodes[1].FormatFailureAsync("GET /api/messages returned no body."));
             Assert.AreEqual(0, getResponse.Messages.Length, await nodes[1].FormatFailureAsync(
@@ -285,7 +304,10 @@ public sealed class MessageRecoveryTests
                 }
             }
 
-            await CreateMessageAsync(nodes[0], "room-repair", "cipher-text-repair");
+            string roomHash = CreateRoomHash("room-repair");
+            string expectedCipherText = CreateCipherText("cipher-text-repair");
+
+            await CreateMessageAsync(nodes[0], roomHash, expectedCipherText);
 
             await nodes[0].StopAsync();
             await nodes[4].StopAsync();
@@ -295,7 +317,7 @@ public sealed class MessageRecoveryTests
                 async () =>
                 {
                     GetMessageShardsResponse? shardResponse = await nodes[3].Client.GetFromJsonAsync<GetMessageShardsResponse>(
-                        "/api/internal/message-shards?roomHash=room-repair&maxId=9223372036854775807&numberToFetch=1");
+                        $"/api/internal/message-shards?roomHash={Uri.EscapeDataString(roomHash)}&maxId=9223372036854775807&numberToFetch=1");
                     return shardResponse?.MessageShards
                         .Where(shard => shard.MessageId > 0)
                         .Select(shard => shard.ShardIndex)
@@ -308,10 +330,10 @@ public sealed class MessageRecoveryTests
 
             await nodes[2].StopAsync();
 
-            GetMessagesResponse repairedResponse = await GetMessagesAsync(nodes[3], "room-repair", numberToFetch: 1);
+            GetMessagesResponse repairedResponse = await GetMessagesAsync(nodes[3], roomHash, numberToFetch: 1);
             Assert.AreEqual(1, repairedResponse.Messages.Length, await nodes[3].FormatFailureAsync(
                 "Expected message retrieval to succeed after integrity repair re-seeded shards."));
-            Assert.AreEqual("cipher-text-repair", repairedResponse.Messages[0].CypherText);
+            Assert.AreEqual(expectedCipherText, repairedResponse.Messages[0].CypherText);
         }
         finally
         {
@@ -379,10 +401,10 @@ public sealed class MessageRecoveryTests
                 {
                     Id = 0,
                     RoomHash = roomHash,
-                    SenderPublicKey = "sender-public-key",
-                    Nonce = "nonce",
+                    SenderPublicKey = SampleSenderPublicKey,
+                    Nonce = SampleNonce,
                     CypherText = cipherText,
-                    Signature = "signature",
+                    Signature = SampleSignature,
                 },
             ],
         };
@@ -464,6 +486,25 @@ public sealed class MessageRecoveryTests
         }
 
         Assert.Fail(failureMessage);
+    }
+
+    private static string CreateRoomHash(string value)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static string CreateCipherText(string value)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    }
+
+    private static string CreateCompositeEnvelope(string firstValue, string secondValue)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(firstValue)),
+            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(secondValue))
+        });
     }
 
     private sealed class ApiNode : IAsyncDisposable

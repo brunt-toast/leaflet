@@ -355,11 +355,61 @@ public sealed class MessageRecoveryTests
         }
     }
 
+    [TestMethod]
+    public async Task RateLimiting_RejectsRequestsBeyondConfiguredWindow_AndResetsAfterWindowExpires()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'.");
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 1, rateLimitPermitLimit: 2, rateLimitWindowSeconds: 1));
+            await Task.Delay(TimeSpan.FromMilliseconds(1200));
+
+            using HttpResponseMessage firstResponse = await nodes[0].Client.GetAsync("/api/servers");
+            using HttpResponseMessage secondResponse = await nodes[0].Client.GetAsync("/api/servers");
+            using HttpResponseMessage limitedResponse = await nodes[0].Client.GetAsync("/api/servers");
+
+            Assert.AreEqual(HttpStatusCode.OK, firstResponse.StatusCode, await nodes[0].FormatFailureAsync("Expected the first request to succeed within the rate limit."));
+            Assert.AreEqual(HttpStatusCode.OK, secondResponse.StatusCode, await nodes[0].FormatFailureAsync("Expected the second request to succeed within the rate limit."));
+            Assert.AreEqual(HttpStatusCode.TooManyRequests, limitedResponse.StatusCode, await nodes[0].FormatFailureAsync("Expected the third request in the same window to be rejected."));
+
+            await Task.Delay(TimeSpan.FromMilliseconds(1200));
+
+            using HttpResponseMessage resetResponse = await nodes[0].Client.GetAsync("/api/servers");
+            Assert.AreEqual(HttpStatusCode.OK, resetResponse.StatusCode, await nodes[0].FormatFailureAsync("Expected rate limiting to reset after the configured window expires."));
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static async Task<List<ApiNode>> StartNodesAsync(
         string apiDllPath,
         string testRoot,
         int count,
-        int repairIntervalSeconds = 0)
+        int repairIntervalSeconds = 0,
+        int rateLimitPermitLimit = 0,
+        int rateLimitWindowSeconds = 60)
     {
         List<ApiNode> nodes = [];
 
@@ -370,7 +420,7 @@ public sealed class MessageRecoveryTests
             string dbPath = Path.Combine(testRoot, $"node-{i + 1}.db");
             string nodeName = $"node-{i + 1}";
 
-            ApiNode node = new(apiDllPath, nodeName, publicUrl, dbPath, testRoot, repairIntervalSeconds);
+            ApiNode node = new(apiDllPath, nodeName, publicUrl, dbPath, testRoot, repairIntervalSeconds, rateLimitPermitLimit, rateLimitWindowSeconds);
             await node.StartAsync();
             nodes.Add(node);
         }
@@ -513,11 +563,21 @@ public sealed class MessageRecoveryTests
         private readonly string _dbPath;
         private readonly string _workingDirectory;
         private readonly int _repairIntervalSeconds;
+        private readonly int _rateLimitPermitLimit;
+        private readonly int _rateLimitWindowSeconds;
         private readonly List<string> _logLines = [];
         private Process? _process;
         private bool _stopped;
 
-        public ApiNode(string apiDllPath, string name, string publicUrl, string dbPath, string workingDirectory, int repairIntervalSeconds)
+        public ApiNode(
+            string apiDllPath,
+            string name,
+            string publicUrl,
+            string dbPath,
+            string workingDirectory,
+            int repairIntervalSeconds,
+            int rateLimitPermitLimit,
+            int rateLimitWindowSeconds)
         {
             _apiDllPath = apiDllPath;
             Name = name;
@@ -525,6 +585,8 @@ public sealed class MessageRecoveryTests
             _dbPath = dbPath;
             _workingDirectory = workingDirectory;
             _repairIntervalSeconds = repairIntervalSeconds;
+            _rateLimitPermitLimit = rateLimitPermitLimit;
+            _rateLimitWindowSeconds = rateLimitWindowSeconds;
             Client = new HttpClient
             {
                 BaseAddress = new Uri(publicUrl),
@@ -556,6 +618,8 @@ public sealed class MessageRecoveryTests
             startInfo.Environment["ErasureCoding__ParityShards"] = "2";
             startInfo.Environment["ErasureCoding__RepairIntervalSeconds"] = _repairIntervalSeconds.ToString();
             startInfo.Environment["ErasureCoding__RepairBatchSize"] = "100";
+            startInfo.Environment["RateLimiting__PermitLimit"] = _rateLimitPermitLimit.ToString();
+            startInfo.Environment["RateLimiting__WindowSeconds"] = _rateLimitWindowSeconds.ToString();
 
             _process = new Process
             {

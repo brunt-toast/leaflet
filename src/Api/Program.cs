@@ -2,6 +2,7 @@ using Api.Configuration;
 using Api.Services;
 using AppDbContext = Api.Context.AppContext;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 
 namespace Api;
 
@@ -18,6 +19,31 @@ public class Program
             options.UseSqlite(connectionString));
         builder.Services.Configure<PeerSyncOptions>(builder.Configuration.GetSection(PeerSyncOptions.SectionName));
         builder.Services.Configure<ErasureCodingOptions>(builder.Configuration.GetSection(ErasureCodingOptions.SectionName));
+
+        RateLimitingOptions rateLimitingOptions = builder.Configuration
+            .GetSection(RateLimitingOptions.SectionName)
+            .Get<RateLimitingOptions>()
+            ?? new RateLimitingOptions();
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            {
+                string clientKey = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+                return RateLimitPartition.GetFixedWindowLimiter(
+                    partitionKey: clientKey,
+                    factory: _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = rateLimitingOptions.PermitLimit,
+                        Window = TimeSpan.FromSeconds(rateLimitingOptions.WindowSeconds),
+                        QueueLimit = 0,
+                        AutoReplenishment = true,
+                    });
+            });
+        });
+
+
         builder.Services.AddHttpClient(nameof(PeerSyncService), client =>
         {
             client.Timeout = TimeSpan.FromSeconds(10);
@@ -52,6 +78,7 @@ public class Program
             app.UseHttpsRedirection();
         }
 
+        app.UseRateLimiter();
         app.UseAuthorization();
         app.MapControllers();
         app.Run();

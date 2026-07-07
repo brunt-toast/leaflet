@@ -403,21 +403,15 @@ internal sealed class TuiApplicationService
             };
         }
 
-        int senderColumnWidth = roomState.Messages.Max(static message => message.Sender.Length);
-        Grid grid = new();
-        grid.AddColumn(new GridColumn().NoWrap());
-        grid.AddColumn(new GridColumn().NoWrap());
-        grid.AddColumn();
+        List<IRenderable> chatRows = [];
 
         foreach (RenderedMessage message in roomState.Messages)
         {
-            grid.AddRow(
-                new Markup($"[grey]{Markup.Escape(FormatMessageTimestamp(message.SentAtUtc))}[/]"),
-                new Text(PadSender(message.Sender, senderColumnWidth), new Style(Color.Blue)),
-                BuildMessageBody(message));
+            chatRows.Add(BuildMessageMetadataLine(message));
+            chatRows.Add(BuildIndentedMessageBody(message));
         }
 
-        return new Panel(grid)
+        return new Panel(new Rows(chatRows.ToArray()))
         {
             Header = new PanelHeader("Chat"),
             Border = BoxBorder.Rounded,
@@ -486,11 +480,6 @@ internal sealed class TuiApplicationService
         return rooms[nextIndex];
     }
 
-    private static string PadSender(string sender, int senderColumnWidth)
-    {
-        return sender.PadLeft(senderColumnWidth);
-    }
-
     private static string FormatMessageTimestamp(DateTimeOffset sentAtUtc)
     {
         return sentAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
@@ -509,6 +498,29 @@ internal sealed class TuiApplicationService
         }
 
         return new Markup($"[white]{Markup.Escape(message.Body)}[/]");
+    }
+
+    private static IRenderable BuildMessageMetadataLine(RenderedMessage message)
+    {
+        string timestamp = Markup.Escape(FormatMessageTimestamp(message.SentAtUtc));
+        string sender = Markup.Escape(message.Sender);
+
+        if (string.IsNullOrWhiteSpace(message.SenderKeyHash))
+        {
+            return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/]");
+        }
+
+        string senderKeyHash = Markup.Escape(message.SenderKeyHash);
+        return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/] [grey]{senderKeyHash}[/]");
+    }
+
+    private static IRenderable BuildIndentedMessageBody(RenderedMessage message)
+    {
+        Grid grid = new();
+        grid.AddColumn(new GridColumn().Width(4));
+        grid.AddColumn();
+        grid.AddRow(new Text("    "), BuildMessageBody(message));
+        return grid;
     }
 }
 

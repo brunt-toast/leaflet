@@ -75,6 +75,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
             {
                 SentAtUtc = payload.SentAtUtc,
                 Sender = payload.SenderName,
+                SenderKeyHash = SenderKeyDisplayFormatter.Format(senderPublicKey),
                 Body = payload.Text,
                 IsVerified = isVerified,
                 IsError = false
@@ -86,6 +87,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
             {
                 SentAtUtc = DateTimeOffset.UtcNow,
                 Sender = "system",
+                SenderKeyHash = string.Empty,
                 Body = ex.Message,
                 IsVerified = false,
                 IsError = true

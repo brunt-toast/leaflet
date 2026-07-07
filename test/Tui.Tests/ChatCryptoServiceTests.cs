@@ -74,6 +74,24 @@ public sealed class ChatCryptoServiceTests
         Assert.AreEqual("TheLegend27", renderedMessage.Sender);
         Assert.AreEqual("legacy payload", renderedMessage.Body);
         Assert.AreEqual(expectedSentAtUtc, renderedMessage.SentAtUtc);
+        Assert.IsTrue(System.Text.RegularExpressions.Regex.IsMatch(renderedMessage.SenderKeyHash, "^[a-z]+-[a-z]+-[a-z]+$"));
+    }
+
+    [TestMethod]
+    public void TryReadMessage_ComputesDeterministicSenderKeyHash()
+    {
+        ChatCryptoService service = new();
+        IdentityConfig identity = LoadIdentityFromConfig();
+
+        EncryptedMessageDto firstMessage = service.CreateEncryptedMessage(s_room, identity, "first");
+        EncryptedMessageDto secondMessage = service.CreateEncryptedMessage(s_room, identity, "second");
+
+        RenderedMessage firstRenderedMessage = service.TryReadMessage(s_room, firstMessage);
+        RenderedMessage secondRenderedMessage = service.TryReadMessage(s_room, secondMessage);
+
+        Assert.IsFalse(firstRenderedMessage.IsError);
+        Assert.IsFalse(secondRenderedMessage.IsError);
+        Assert.AreEqual(firstRenderedMessage.SenderKeyHash, secondRenderedMessage.SenderKeyHash);
     }
 
     private static string DecryptPayloadJson(string roomKey, EncryptedMessageDto message)

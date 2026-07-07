@@ -81,7 +81,7 @@ public class Program
         });
         builder.Services.AddHttpClient(nameof(MessageErasureCodingService), client =>
         {
-            client.Timeout = TimeSpan.FromSeconds(10);
+            client.Timeout = TimeSpan.FromSeconds(3);
         });
         builder.Services.AddSingleton<IMessageShardDistributionQueue, MessageShardDistributionQueue>();
         builder.Services.AddScoped<IMessageIdentityService, MessageIdentityService>();

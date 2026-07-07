@@ -15,6 +15,7 @@ namespace Api.Services;
 internal sealed class MessageErasureCodingService : IMessageErasureCodingService
 {
     private const string MessageShardsEndpointPath = "/api/internal/message-shards";
+    private const int MaxPeerConcurrency = 4;
     private readonly AppDbContext _appContext;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMessageIdentityService _messageIdentityService;
@@ -178,11 +179,14 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
             }
         }
 
-        foreach ((string peerUrl, List<MessageShardDto> peerShards) in shardsByPeerUrl)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await PushShardsToPeerAsync(peerUrl, peerShards, cancellationToken);
-        }
+        await RunBoundedAsync(
+            shardsByPeerUrl,
+            async shardBatch =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await PushShardsToPeerAsync(shardBatch.Key, shardBatch.Value, cancellationToken);
+            },
+            cancellationToken);
     }
 
     public async Task RepairShardIntegrityAsync(CancellationToken cancellationToken)
@@ -368,35 +372,44 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
             .Select(peer => peer.Url)
             .ToArrayAsync(cancellationToken);
 
-        List<MessageShardDto> shards = [];
+        List<MessageShardDto[]> shardResponses = [];
+        object shardLock = new();
 
-        foreach (string peerUrl in peerUrls)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
+        await RunBoundedAsync(
+            peerUrls,
+            async peerUrl =>
             {
-                HttpClient client = _httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
-                string requestUri =
-                    $"{peerUrl}{MessageShardsEndpointPath}?roomHash={Uri.EscapeDataString(roomHash)}&maxId={maxId}&numberToFetch={numberToFetch}";
-                if (sinceId.HasValue)
-                {
-                    requestUri = $"{requestUri}&sinceId={sinceId.Value}";
-                }
+                cancellationToken.ThrowIfCancellationRequested();
 
-                GetMessageShardsResponse? response = await client.GetFromJsonAsync<GetMessageShardsResponse>(requestUri, cancellationToken);
-                if (response?.MessageShards is not null)
+                try
                 {
-                    shards.AddRange(response.MessageShards);
-                }
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
-            {
-                _logger.LogWarning(ex, "Failed to fetch message shards from peer '{PeerUrl}'.", peerUrl);
-            }
-        }
+                    HttpClient client = _httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
+                    string requestUri =
+                        $"{peerUrl}{MessageShardsEndpointPath}?roomHash={Uri.EscapeDataString(roomHash)}&maxId={maxId}&numberToFetch={numberToFetch}";
+                    if (sinceId.HasValue)
+                    {
+                        requestUri = $"{requestUri}&sinceId={sinceId.Value}";
+                    }
 
-        return shards.ToArray();
+                    GetMessageShardsResponse? response = await client.GetFromJsonAsync<GetMessageShardsResponse>(requestUri, cancellationToken);
+                    if (response?.MessageShards is not null)
+                    {
+                        lock (shardLock)
+                        {
+                            shardResponses.Add(response.MessageShards);
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+                {
+                    _logger.LogWarning(ex, "Failed to fetch message shards from peer '{PeerUrl}'.", peerUrl);
+                }
+            },
+            cancellationToken);
+
+        return shardResponses
+            .SelectMany(response => response)
+            .ToArray();
     }
 
     private async Task<MessageShardDto[]> FetchRemoteExactMessageShardsAsync(
@@ -622,6 +635,32 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         }
 
         return uri.AbsoluteUri.TrimEnd('/');
+    }
+
+    private static async Task RunBoundedAsync<T>(
+        IEnumerable<T> items,
+        Func<T, Task> action,
+        CancellationToken cancellationToken)
+    {
+        using SemaphoreSlim gate = new(MaxPeerConcurrency, MaxPeerConcurrency);
+
+        Task[] tasks = items
+            .Select(async item =>
+            {
+                await gate.WaitAsync(cancellationToken);
+
+                try
+                {
+                    await action(item);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            })
+            .ToArray();
+
+        await Task.WhenAll(tasks);
     }
 }
 

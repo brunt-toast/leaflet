@@ -8,6 +8,7 @@ using Core.Responses.Messages;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Buffers;
 
 namespace Api.Controllers;
 
@@ -61,13 +62,37 @@ public sealed class MessagesController(
         [FromBody] CreateMessagesRequest request,
         CancellationToken cancellationToken)
     {
-        int maxMessagesPerRequest = messageRequestOptions.Value.MaxMessagesPerRequest;
+        MessageRequestOptions options = messageRequestOptions.Value;
+        int maxMessagesPerRequest = options.MaxMessagesPerRequest;
         if (maxMessagesPerRequest > 0 && request.Messages.Length > maxMessagesPerRequest)
         {
             return Problem(
                 detail: $"This server accepts a maximum of {maxMessagesPerRequest} messages per request.",
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Too many messages.");
+        }
+
+        int maxMessageContentBytes = options.MaxMessageContentBytes;
+        if (maxMessageContentBytes > 0)
+        {
+            foreach (EncryptedMessageDto message in request.Messages)
+            {
+                if (!TryGetDecodedByteCount(message.CypherText, out int decodedByteCount))
+                {
+                    return Problem(
+                        detail: "Message content must be valid base64.",
+                        statusCode: StatusCodes.Status400BadRequest,
+                        title: "Invalid message content.");
+                }
+
+                if (decodedByteCount > maxMessageContentBytes)
+                {
+                    return Problem(
+                        detail: $"Individual message content must not exceed {maxMessageContentBytes} bytes.",
+                        statusCode: StatusCodes.Status400BadRequest,
+                        title: "Message content too large.");
+                }
+            }
         }
 
         EncryptedMessageEntity[] entities = request.Messages
@@ -101,5 +126,26 @@ public sealed class MessagesController(
             cancellationToken);
 
         return Ok(new CreateMessagesResponse());
+    }
+
+    private static bool TryGetDecodedByteCount(string base64Value, out int decodedByteCount)
+    {
+        decodedByteCount = 0;
+        byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent(base64Value.Length);
+
+        try
+        {
+            if (!Convert.TryFromBase64String(base64Value, rentedBuffer, out decodedByteCount))
+            {
+                decodedByteCount = 0;
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedBuffer);
+        }
     }
 }

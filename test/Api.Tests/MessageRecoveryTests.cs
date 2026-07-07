@@ -455,14 +455,79 @@ public sealed class MessageRecoveryTests
         }
     }
 
+    [TestMethod]
+    public async Task CreateMessages_RejectsMessagesWhoseDecodedContentExceedsConfiguredByteLimit()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'.");
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 1, maxMessageContentBytes: 4));
+
+            string roomHash = CreateRoomHash("room-content-limit");
+
+            using HttpResponseMessage acceptedResponse = await nodes[0].Client.PostAsJsonAsync(
+                "/api/messages",
+                new CreateMessagesRequest
+                {
+                    Messages =
+                    [
+                        CreateEncryptedMessage(roomHash, Convert.ToBase64String(new byte[] { 1, 2, 3, 4 })),
+                    ],
+                });
+            Assert.AreEqual(HttpStatusCode.OK, acceptedResponse.StatusCode, await nodes[0].FormatFailureAsync(
+                "Expected message content at the configured byte limit to be accepted."));
+
+            using HttpResponseMessage rejectedResponse = await nodes[0].Client.PostAsJsonAsync(
+                "/api/messages",
+                new CreateMessagesRequest
+                {
+                    Messages =
+                    [
+                        CreateEncryptedMessage(roomHash, Convert.ToBase64String(new byte[] { 1, 2, 3, 4, 5 })),
+                    ],
+                });
+            Assert.AreEqual(HttpStatusCode.BadRequest, rejectedResponse.StatusCode, await nodes[0].FormatFailureAsync(
+                "Expected the server to reject message content that exceeds the configured byte limit."));
+
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[0], roomHash, numberToFetch: 10);
+            Assert.AreEqual(1, messages.Messages.Length, await nodes[0].FormatFailureAsync(
+                "Expected only the accepted message to be persisted when an oversized message is rejected."));
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static async Task<List<ApiNode>> StartNodesAsync(
         string apiDllPath,
         string testRoot,
         int count,
         int repairIntervalSeconds = 0,
-        int rateLimitPermitLimit = 0,
+        int rateLimitPermitLimit = 1000,
         int rateLimitWindowSeconds = 60,
-        int maxMessagesPerRequest = 0)
+        int maxMessagesPerRequest = 0,
+        int maxMessageContentBytes = 0)
     {
         List<ApiNode> nodes = [];
 
@@ -482,7 +547,8 @@ public sealed class MessageRecoveryTests
                 repairIntervalSeconds,
                 rateLimitPermitLimit,
                 rateLimitWindowSeconds,
-                maxMessagesPerRequest);
+                maxMessagesPerRequest,
+                maxMessageContentBytes);
             await node.StartAsync();
             nodes.Add(node);
         }
@@ -633,6 +699,7 @@ public sealed class MessageRecoveryTests
         private readonly int _rateLimitPermitLimit;
         private readonly int _rateLimitWindowSeconds;
         private readonly int _maxMessagesPerRequest;
+        private readonly int _maxMessageContentBytes;
         private readonly List<string> _logLines = [];
         private Process? _process;
         private bool _stopped;
@@ -646,7 +713,8 @@ public sealed class MessageRecoveryTests
             int repairIntervalSeconds,
             int rateLimitPermitLimit,
             int rateLimitWindowSeconds,
-            int maxMessagesPerRequest)
+            int maxMessagesPerRequest,
+            int maxMessageContentBytes)
         {
             _apiDllPath = apiDllPath;
             Name = name;
@@ -657,6 +725,7 @@ public sealed class MessageRecoveryTests
             _rateLimitPermitLimit = rateLimitPermitLimit;
             _rateLimitWindowSeconds = rateLimitWindowSeconds;
             _maxMessagesPerRequest = maxMessagesPerRequest;
+            _maxMessageContentBytes = maxMessageContentBytes;
             Client = new HttpClient
             {
                 BaseAddress = new Uri(publicUrl),
@@ -691,6 +760,7 @@ public sealed class MessageRecoveryTests
             startInfo.Environment["RateLimiting__PermitLimit"] = _rateLimitPermitLimit.ToString();
             startInfo.Environment["RateLimiting__WindowSeconds"] = _rateLimitWindowSeconds.ToString();
             startInfo.Environment["MessageRequests__MaxMessagesPerRequest"] = _maxMessagesPerRequest.ToString();
+            startInfo.Environment["MessageRequests__MaxMessageContentBytes"] = _maxMessageContentBytes.ToString();
 
             _process = new Process
             {

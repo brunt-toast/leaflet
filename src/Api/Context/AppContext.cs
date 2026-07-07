@@ -26,7 +26,7 @@ public class AppContext : DbContext
 
         modelBuilder.Entity<EncryptedMessageEntity>()
             .Property(message => message.SenderPublicKey)
-            .HasConversion(StorageValueConverters.PublicKeyEnvelopeConverter)
+            .HasConversion(StorageValueConverters.Utf8StringConverter)
             .HasColumnType("BLOB");
 
         modelBuilder.Entity<EncryptedMessageEntity>()

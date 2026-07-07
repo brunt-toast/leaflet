@@ -14,9 +14,9 @@ internal static class StorageValueConverters
         value => Convert.FromBase64String(value),
         bytes => Convert.ToBase64String(bytes));
 
-    public static readonly ValueConverter<string, byte[]> PublicKeyEnvelopeConverter = new(
-        json => EncodeCompositeEnvelope(json),
-        bytes => DecodeCompositeEnvelope(bytes));
+    public static readonly ValueConverter<string, byte[]> Utf8StringConverter = new(
+        value => System.Text.Encoding.UTF8.GetBytes(value),
+        bytes => System.Text.Encoding.UTF8.GetString(bytes));
 
     public static readonly ValueConverter<string, byte[]> SignatureEnvelopeConverter = new(
         json => EncodeCompositeEnvelope(json),

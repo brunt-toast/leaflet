@@ -36,6 +36,24 @@ public sealed class ChatCryptoServiceTests
     }
 
     [TestMethod]
+    public void CreateEncryptedMessage_EncryptsSenderPublicKeyWithRoomKey()
+    {
+        ChatCryptoService service = new();
+        IdentityConfig identity = LoadIdentityFromConfig();
+
+        EncryptedMessageDto message = service.CreateEncryptedMessage(s_room, identity, TestMessageText);
+        byte[] roomKeyBytes = InvokePrivateStatic<byte[]>(nameof(ChatCryptoService), "DeriveEncryptionKey", s_room.Key);
+        string decryptedSenderPublicKey = InvokePrivateStatic<string>(
+            nameof(ChatCryptoService),
+            "DecryptSenderPublicKey",
+            message.SenderPublicKey,
+            roomKeyBytes);
+
+        Assert.AreNotEqual(identity.PublicKey, message.SenderPublicKey);
+        Assert.AreEqual(identity.PublicKey, decryptedSenderPublicKey);
+    }
+
+    [TestMethod]
     public void TryReadMessage_ReadsLegacyPayloadShape()
     {
         ChatCryptoService service = new();
@@ -76,13 +94,18 @@ public sealed class ChatCryptoServiceTests
 
         ChatCryptoService service = new();
         string roomHash = service.ComputeRoomHash(room.Key);
+        string encryptedSenderPublicKey = InvokePrivateStatic<string>(
+            nameof(ChatCryptoService),
+            "EncryptSenderPublicKey",
+            identity.PublicKey,
+            roomKeyBytes);
         byte[] signaturePayload = InvokePrivateStatic<byte[]>(
             nameof(ChatCryptoService),
             "BuildSignaturePayload",
             roomHash,
             nonce,
             cipherText,
-            identity.PublicKey);
+            encryptedSenderPublicKey);
         string signature = InvokePrivateStatic<string>(
             nameof(ChatCryptoService),
             "Sign",
@@ -93,7 +116,7 @@ public sealed class ChatCryptoServiceTests
         {
             Id = 0,
             RoomHash = roomHash,
-            SenderPublicKey = identity.PublicKey,
+            SenderPublicKey = encryptedSenderPublicKey,
             Nonce = Convert.ToBase64String(nonce),
             CypherText = Convert.ToBase64String(cipherText),
             Signature = signature

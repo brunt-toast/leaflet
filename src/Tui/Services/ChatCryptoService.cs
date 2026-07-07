@@ -26,6 +26,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
     {
         byte[] roomKey = DeriveEncryptionKey(room.Key);
         byte[] nonce = SecretAeadXChaCha20Poly1305.GenerateNonce();
+        string encryptedSenderPublicKey = EncryptSenderPublicKey(identity.PublicKey, roomKey);
         RoomMessageEnvelope envelope = new()
         {
             Content = new RoomMessageContent
@@ -42,14 +43,14 @@ internal sealed class ChatCryptoService : IChatCryptoService
         byte[] plaintext = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(envelope));
         byte[] cipherText = SecretAeadXChaCha20Poly1305.Encrypt(plaintext, nonce, roomKey, []);
         string roomHash = ComputeRoomHash(room.Key);
-        byte[] signaturePayload = BuildSignaturePayload(roomHash, nonce, cipherText, identity.PublicKey);
+        byte[] signaturePayload = BuildSignaturePayload(roomHash, nonce, cipherText, encryptedSenderPublicKey);
         string signature = Sign(signaturePayload, identity.PrivateKey);
 
         return new EncryptedMessageDto
         {
             Id = 0,
             RoomHash = roomHash,
-            SenderPublicKey = identity.PublicKey,
+            SenderPublicKey = encryptedSenderPublicKey,
             Nonce = Convert.ToBase64String(nonce),
             CypherText = Convert.ToBase64String(cipherText),
             Signature = signature
@@ -63,11 +64,12 @@ internal sealed class ChatCryptoService : IChatCryptoService
             byte[] roomKey = DeriveEncryptionKey(room.Key);
             byte[] nonce = Convert.FromBase64String(message.Nonce);
             byte[] cipherText = Convert.FromBase64String(message.CypherText);
+            string senderPublicKey = DecryptSenderPublicKey(message.SenderPublicKey, roomKey);
             byte[] plaintext = SecretAeadXChaCha20Poly1305.Decrypt(cipherText, nonce, roomKey, []);
             DecodedRoomMessage payload = DecodePayload(Encoding.UTF8.GetString(plaintext));
 
             byte[] signaturePayload = BuildSignaturePayload(message.RoomHash, nonce, cipherText, message.SenderPublicKey);
-            bool isVerified = Verify(signaturePayload, message.Signature, message.SenderPublicKey);
+            bool isVerified = Verify(signaturePayload, message.Signature, senderPublicKey);
 
             return new RenderedMessage
             {
@@ -125,6 +127,30 @@ internal sealed class ChatCryptoService : IChatCryptoService
         });
 
         return Encoding.UTF8.GetBytes(canonical);
+    }
+
+    private static string EncryptSenderPublicKey(string publicKeyJson, byte[] roomKey)
+    {
+        byte[] nonce = SecretAeadXChaCha20Poly1305.GenerateNonce();
+        byte[] plaintext = Encoding.UTF8.GetBytes(publicKeyJson);
+        byte[] cipherText = SecretAeadXChaCha20Poly1305.Encrypt(plaintext, nonce, roomKey, []);
+
+        SenderPublicKeyEnvelope envelope = new()
+        {
+            Nonce = Convert.ToBase64String(nonce),
+            CypherText = Convert.ToBase64String(cipherText)
+        };
+
+        return JsonConvert.SerializeObject(envelope);
+    }
+
+    private static string DecryptSenderPublicKey(string encryptedPublicKeyJson, byte[] roomKey)
+    {
+        SenderPublicKeyEnvelope envelope = ParseSenderPublicKeyEnvelope(encryptedPublicKeyJson);
+        byte[] nonce = Convert.FromBase64String(envelope.Nonce);
+        byte[] cipherText = Convert.FromBase64String(envelope.CypherText);
+        byte[] plaintext = SecretAeadXChaCha20Poly1305.Decrypt(cipherText, nonce, roomKey, []);
+        return Encoding.UTF8.GetString(plaintext);
     }
 
     private static string Sign(byte[] payload, string privateKeyJson)
@@ -208,6 +234,12 @@ internal sealed class ChatCryptoService : IChatCryptoService
             ?? throw new InvalidOperationException("Message signature is not valid composite signature JSON.");
     }
 
+    private static SenderPublicKeyEnvelope ParseSenderPublicKeyEnvelope(string json)
+    {
+        return JsonConvert.DeserializeObject<SenderPublicKeyEnvelope>(json)
+            ?? throw new InvalidOperationException("Message sender public key is not a valid encrypted envelope JSON.");
+    }
+
     private static byte[] DecodeBase64KeyMaterial(string value, string fieldName)
     {
         string normalized = NormalizeBase64(value);
@@ -241,6 +273,13 @@ internal sealed class ChatCryptoService : IChatCryptoService
 
         return builder.ToString();
     }
+}
+
+internal sealed class SenderPublicKeyEnvelope
+{
+    public string Nonce { get; init; } = string.Empty;
+
+    public string CypherText { get; init; } = string.Empty;
 }
 
 internal sealed record DecodedRoomMessage

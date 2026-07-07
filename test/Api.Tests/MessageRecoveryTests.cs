@@ -403,13 +403,66 @@ public sealed class MessageRecoveryTests
         }
     }
 
+    [TestMethod]
+    public async Task CreateMessages_RejectsRequestsThatExceedConfiguredBatchSize()
+    {
+        string solutionRoot = GetSolutionRoot();
+        string apiDllPath = Path.Combine(solutionRoot, "src", "Api", "bin", "Debug", "net10.0", "Api.dll");
+        Assert.IsTrue(File.Exists(apiDllPath), $"Expected API assembly at '{apiDllPath}'.");
+
+        string testRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"messaging-2-tests-{Guid.NewGuid():N}")).FullName;
+        List<ApiNode> nodes = [];
+
+        try
+        {
+            nodes.AddRange(await StartNodesAsync(apiDllPath, testRoot, count: 1, maxMessagesPerRequest: 1));
+
+            string roomHash = CreateRoomHash("room-batch-limit");
+            CreateMessagesRequest createRequest = new()
+            {
+                Messages =
+                [
+                    CreateEncryptedMessage(roomHash, CreateCipherText("cipher-text-a")),
+                    CreateEncryptedMessage(roomHash, CreateCipherText("cipher-text-b")),
+                ],
+            };
+
+            using HttpResponseMessage postResponse = await nodes[0].Client.PostAsJsonAsync("/api/messages", createRequest);
+            Assert.AreEqual(HttpStatusCode.BadRequest, postResponse.StatusCode, await nodes[0].FormatFailureAsync(
+                "Expected the server to reject a request that exceeds the configured message batch size."));
+
+            GetMessagesResponse messages = await GetMessagesAsync(nodes[0], roomHash, numberToFetch: 10);
+            Assert.AreEqual(0, messages.Messages.Length, await nodes[0].FormatFailureAsync(
+                "Expected rejected oversized message requests to leave storage unchanged."));
+        }
+        finally
+        {
+            foreach (ApiNode node in nodes)
+            {
+                await node.DisposeAsync();
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static async Task<List<ApiNode>> StartNodesAsync(
         string apiDllPath,
         string testRoot,
         int count,
         int repairIntervalSeconds = 0,
         int rateLimitPermitLimit = 0,
-        int rateLimitWindowSeconds = 60)
+        int rateLimitWindowSeconds = 60,
+        int maxMessagesPerRequest = 0)
     {
         List<ApiNode> nodes = [];
 
@@ -420,7 +473,16 @@ public sealed class MessageRecoveryTests
             string dbPath = Path.Combine(testRoot, $"node-{i + 1}.db");
             string nodeName = $"node-{i + 1}";
 
-            ApiNode node = new(apiDllPath, nodeName, publicUrl, dbPath, testRoot, repairIntervalSeconds, rateLimitPermitLimit, rateLimitWindowSeconds);
+            ApiNode node = new(
+                apiDllPath,
+                nodeName,
+                publicUrl,
+                dbPath,
+                testRoot,
+                repairIntervalSeconds,
+                rateLimitPermitLimit,
+                rateLimitWindowSeconds,
+                maxMessagesPerRequest);
             await node.StartAsync();
             nodes.Add(node);
         }
@@ -447,15 +509,7 @@ public sealed class MessageRecoveryTests
         {
             Messages =
             [
-                new EncryptedMessageDto
-                {
-                    Id = 0,
-                    RoomHash = roomHash,
-                    SenderPublicKey = SampleSenderPublicKey,
-                    Nonce = SampleNonce,
-                    CypherText = cipherText,
-                    Signature = SampleSignature,
-                },
+                CreateEncryptedMessage(roomHash, cipherText),
             ],
         };
 
@@ -548,6 +602,19 @@ public sealed class MessageRecoveryTests
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
     }
 
+    private static EncryptedMessageDto CreateEncryptedMessage(string roomHash, string cipherText)
+    {
+        return new EncryptedMessageDto
+        {
+            Id = 0,
+            RoomHash = roomHash,
+            SenderPublicKey = SampleSenderPublicKey,
+            Nonce = SampleNonce,
+            CypherText = cipherText,
+            Signature = SampleSignature,
+        };
+    }
+
     private static string CreateCompositeEnvelope(string firstValue, string secondValue)
     {
         return JsonSerializer.Serialize(new
@@ -565,6 +632,7 @@ public sealed class MessageRecoveryTests
         private readonly int _repairIntervalSeconds;
         private readonly int _rateLimitPermitLimit;
         private readonly int _rateLimitWindowSeconds;
+        private readonly int _maxMessagesPerRequest;
         private readonly List<string> _logLines = [];
         private Process? _process;
         private bool _stopped;
@@ -577,7 +645,8 @@ public sealed class MessageRecoveryTests
             string workingDirectory,
             int repairIntervalSeconds,
             int rateLimitPermitLimit,
-            int rateLimitWindowSeconds)
+            int rateLimitWindowSeconds,
+            int maxMessagesPerRequest)
         {
             _apiDllPath = apiDllPath;
             Name = name;
@@ -587,6 +656,7 @@ public sealed class MessageRecoveryTests
             _repairIntervalSeconds = repairIntervalSeconds;
             _rateLimitPermitLimit = rateLimitPermitLimit;
             _rateLimitWindowSeconds = rateLimitWindowSeconds;
+            _maxMessagesPerRequest = maxMessagesPerRequest;
             Client = new HttpClient
             {
                 BaseAddress = new Uri(publicUrl),
@@ -620,6 +690,7 @@ public sealed class MessageRecoveryTests
             startInfo.Environment["ErasureCoding__RepairBatchSize"] = "100";
             startInfo.Environment["RateLimiting__PermitLimit"] = _rateLimitPermitLimit.ToString();
             startInfo.Environment["RateLimiting__WindowSeconds"] = _rateLimitWindowSeconds.ToString();
+            startInfo.Environment["MessageRequests__MaxMessagesPerRequest"] = _maxMessagesPerRequest.ToString();
 
             _process = new Process
             {

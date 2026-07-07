@@ -19,6 +19,7 @@ public class Program
             options.UseSqlite(connectionString));
         builder.Services.Configure<PeerSyncOptions>(builder.Configuration.GetSection(PeerSyncOptions.SectionName));
         builder.Services.Configure<ErasureCodingOptions>(builder.Configuration.GetSection(ErasureCodingOptions.SectionName));
+        builder.Services.Configure<MessageRequestOptions>(builder.Configuration.GetSection(MessageRequestOptions.SectionName));
 
         RateLimitingOptions rateLimitingOptions = builder.Configuration
             .GetSection(RateLimitingOptions.SectionName)

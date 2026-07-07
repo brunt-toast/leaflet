@@ -1,3 +1,4 @@
+using Api.Configuration;
 using Api.Entities;
 using Api.Services;
 using AppDbContext = Api.Context.AppContext;
@@ -6,6 +7,7 @@ using Core.Requests.Messages;
 using Core.Responses.Messages;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Api.Controllers;
 
@@ -14,7 +16,8 @@ namespace Api.Controllers;
 public sealed class MessagesController(
     AppDbContext appContext,
     IMessageErasureCodingService messageErasureCodingService,
-    IMessageIdentityService messageIdentityService) : ControllerBase
+    IMessageIdentityService messageIdentityService,
+    IOptions<MessageRequestOptions> messageRequestOptions) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<GetMessagesResponse>(StatusCodes.Status200OK)]
@@ -53,10 +56,20 @@ public sealed class MessagesController(
 
     [HttpPost]
     [ProducesResponseType<CreateMessagesResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<CreateMessagesResponse>> CreateMessagesAsync(
         [FromBody] CreateMessagesRequest request,
         CancellationToken cancellationToken)
     {
+        int maxMessagesPerRequest = messageRequestOptions.Value.MaxMessagesPerRequest;
+        if (maxMessagesPerRequest > 0 && request.Messages.Length > maxMessagesPerRequest)
+        {
+            return Problem(
+                detail: $"This server accepts a maximum of {maxMessagesPerRequest} messages per request.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Too many messages.");
+        }
+
         EncryptedMessageEntity[] entities = request.Messages
             .Select(static message => new EncryptedMessageEntity
             {

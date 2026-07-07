@@ -77,7 +77,7 @@ internal static class Program
         builder.Services.AddSingleton(serviceProvider => new AppConfigIoService(
             runtimeConfigPath,
             serviceProvider.GetRequiredService<PasswordService>()));
-        builder.Services.AddSingleton<CompositeIdentityGeneratorService>();
+        builder.Services.AddSingleton<IdentityGeneratorService>();
         builder.Services.AddSingleton<IChatCryptoService, ChatCryptoService>();
         builder.Services.AddHttpClient<MessagingApiClientService>();
         builder.Services.AddHttpClient<ServerDiscoveryService>();

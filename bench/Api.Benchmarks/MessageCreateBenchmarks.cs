@@ -5,7 +5,6 @@ using BenchmarkDotNet.Order;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using AppDbContext = Api.Context.AppContext;
 
 namespace Api.Benchmarks;
@@ -15,8 +14,8 @@ namespace Api.Benchmarks;
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
 public class MessageCreateBenchmarks
 {
-    private static readonly string SampleSenderPublicKey = CreateCompositeEnvelope("sender-public-key-mldsa", "sender-public-key-slhdsa");
-    private static readonly string SampleSignature = CreateCompositeEnvelope("signature-mldsa", "signature-slhdsa");
+    private static readonly string SampleSenderPublicKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("sender-public-key-mldsa"));
+    private static readonly string SampleSignature = Convert.ToBase64String(Encoding.UTF8.GetBytes("signature-mldsa"));
     private static readonly string SampleNonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray());
     private ApiCluster? _cluster;
     private string? _dbPath;
@@ -111,14 +110,5 @@ public class MessageCreateBenchmarks
     private static string CreateCipherText(string value)
     {
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
-    }
-
-    private static string CreateCompositeEnvelope(string firstValue, string secondValue)
-    {
-        return JsonSerializer.Serialize(new
-        {
-            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(firstValue)),
-            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(secondValue))
-        });
     }
 }

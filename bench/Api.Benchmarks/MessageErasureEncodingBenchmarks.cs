@@ -1,9 +1,9 @@
-using System.Text.Json;
 using Api.Configuration;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
 using Core.Dto;
 using System.Text;
+using System.Text.Json;
 using Witteborn.ReedSolomon;
 
 namespace Api.Benchmarks;
@@ -23,18 +23,10 @@ public class MessageErasureEncodingBenchmarks
     {
         Id = 42,
         RoomHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("room-benchmark"))).ToLowerInvariant(),
-        SenderPublicKey = JsonSerializer.Serialize(new
-        {
-            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes("sender-public-key-mldsa")),
-            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes("sender-public-key-slhdsa"))
-        }),
+        SenderPublicKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("sender-public-key-mldsa")),
         Nonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray()),
         CypherText = Convert.ToBase64String(Encoding.UTF8.GetBytes("cipher-text")),
-        Signature = JsonSerializer.Serialize(new
-        {
-            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes("signature-mldsa")),
-            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes("signature-slhdsa"))
-        }),
+        Signature = Convert.ToBase64String(Encoding.UTF8.GetBytes("signature-mldsa")),
     };
 
     [Benchmark(Description = "Message erasure encoding")]

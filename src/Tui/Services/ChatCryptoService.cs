@@ -161,50 +161,26 @@ internal sealed class ChatCryptoService : IChatCryptoService
 
     private static string Sign(byte[] payload, string privateKeyJson)
     {
-        CompositePrivateKeyEnvelope envelope = ParsePrivateEnvelope(privateKeyJson);
-
         MLDsaPrivateKeyParameters mldsaPrivateKey = (MLDsaPrivateKeyParameters)PrivateKeyFactory.CreateKey(
-            DecodeBase64KeyMaterial(envelope.Mldsa, "private_key.mldsa"));
-        SlhDsaPrivateKeyParameters slhDsaPrivateKey = (SlhDsaPrivateKeyParameters)PrivateKeyFactory.CreateKey(
-            DecodeBase64KeyMaterial(envelope.SlhDsa, "private_key.slhdsa"));
+            DecodeBase64KeyMaterial(privateKeyJson, "private_key"));
 
         MLDsaSigner mldsaSigner = new(MLDsaParameters.ml_dsa_87, false);
         mldsaSigner.Init(true, mldsaPrivateKey);
         mldsaSigner.BlockUpdate(payload);
 
-        SlhDsaSigner slhDsaSigner = new(SlhDsaParameters.slh_dsa_shake_256s, false);
-        slhDsaSigner.Init(true, slhDsaPrivateKey);
-        slhDsaSigner.BlockUpdate(payload);
-
-        CompositeSignatureEnvelope signature = new()
-        {
-            Mldsa = Convert.ToBase64String(mldsaSigner.GenerateSignature()),
-            SlhDsa = Convert.ToBase64String(slhDsaSigner.GenerateSignature())
-        };
-
-        return JsonConvert.SerializeObject(signature);
+        return Convert.ToBase64String(mldsaSigner.GenerateSignature());
     }
 
     private static bool Verify(byte[] payload, string signatureJson, string publicKeyJson)
     {
-        CompositeSignatureEnvelope signature = ParseSignatureEnvelope(signatureJson);
-        CompositePublicKeyEnvelope publicKeys = ParsePublicEnvelope(publicKeyJson);
-
         MLDsaPublicKeyParameters mldsaPublicKey = (MLDsaPublicKeyParameters)PublicKeyFactory.CreateKey(
-            DecodeBase64KeyMaterial(publicKeys.Mldsa, "public_key.mldsa"));
-        SlhDsaPublicKeyParameters slhDsaPublicKey = (SlhDsaPublicKeyParameters)PublicKeyFactory.CreateKey(
-            DecodeBase64KeyMaterial(publicKeys.SlhDsa, "public_key.slhdsa"));
+            DecodeBase64KeyMaterial(publicKeyJson, "public_key"));
 
         MLDsaSigner mldsaSigner = new(MLDsaParameters.ml_dsa_87, false);
         mldsaSigner.Init(false, mldsaPublicKey);
         mldsaSigner.BlockUpdate(payload);
 
-        SlhDsaSigner slhDsaSigner = new(SlhDsaParameters.slh_dsa_shake_256s, false);
-        slhDsaSigner.Init(false, slhDsaPublicKey);
-        slhDsaSigner.BlockUpdate(payload);
-
-        return mldsaSigner.VerifySignature(DecodeBase64KeyMaterial(signature.Mldsa, "signature.mldsa"))
-            && slhDsaSigner.VerifySignature(DecodeBase64KeyMaterial(signature.SlhDsa, "signature.slhdsa"));
+        return mldsaSigner.VerifySignature(DecodeBase64KeyMaterial(signatureJson, "signature"));
     }
 
     private static byte[] DeriveEncryptionKey(string roomKey)
@@ -220,24 +196,6 @@ internal sealed class ChatCryptoService : IChatCryptoService
         byte[] output = new byte[outputLength];
         digest.OutputFinal(output, 0, outputLength);
         return output;
-    }
-
-    private static CompositePublicKeyEnvelope ParsePublicEnvelope(string json)
-    {
-        return JsonConvert.DeserializeObject<CompositePublicKeyEnvelope>(json)
-            ?? throw new InvalidOperationException("Identity public_key is not valid composite key JSON.");
-    }
-
-    private static CompositePrivateKeyEnvelope ParsePrivateEnvelope(string json)
-    {
-        return JsonConvert.DeserializeObject<CompositePrivateKeyEnvelope>(json)
-            ?? throw new InvalidOperationException("Identity private_key is not valid composite key JSON.");
-    }
-
-    private static CompositeSignatureEnvelope ParseSignatureEnvelope(string json)
-    {
-        return JsonConvert.DeserializeObject<CompositeSignatureEnvelope>(json)
-            ?? throw new InvalidOperationException("Message signature is not valid composite signature JSON.");
     }
 
     private static SenderPublicKeyEnvelope ParseSenderPublicKeyEnvelope(string json)
@@ -263,7 +221,7 @@ internal sealed class ChatCryptoService : IChatCryptoService
         catch (FormatException ex)
         {
             throw new InvalidOperationException(
-                $"'{fieldName}' is not valid Base64 key material. If you pasted generated keys from the terminal, make sure you copied the full JSON string without truncation.",
+                $"'{fieldName}' is not valid Base64 key material. If you pasted generated keys from the terminal, make sure you copied the full Base64 value without truncation.",
                 ex);
         }
     }

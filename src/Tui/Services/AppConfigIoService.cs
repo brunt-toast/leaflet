@@ -52,7 +52,7 @@ internal sealed class AppConfigIoService
         await File.WriteAllTextAsync(_configPath, encryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
     }
 
-    public async Task AddIdentityAsync(CompositeIdentity identity, CancellationToken ct = default)
+    public async Task AddIdentityAsync(GeneratedIdentity identity, CancellationToken ct = default)
     {
         string persistedContent = await File.ReadAllTextAsync(_configPath, ct);
         bool isEncrypted = IsEncrypted(persistedContent);
@@ -168,7 +168,7 @@ internal sealed class AppConfigIoService
             KeyBytes);
     }
 
-    private static string AppendIdentity(string content, CompositeIdentity identity)
+    private static string AppendIdentity(string content, GeneratedIdentity identity)
     {
         TomlTable root = TomlSerializer.Deserialize<TomlTable>(content)
             ?? throw new InvalidOperationException("Could not parse config.toml.");
@@ -186,8 +186,8 @@ internal sealed class AppConfigIoService
         string snippet =
             $"[identities.{identity.Name}]{Environment.NewLine}" +
             $"name = \"{identity.Name}\"{Environment.NewLine}" +
-            $"public_key = '''{identity.PublicKeyJson}'''{Environment.NewLine}" +
-            $"private_key = '''{identity.PrivateKeyJson}'''";
+            $"public_key = '''{identity.PublicKey}'''{Environment.NewLine}" +
+            $"private_key = '''{identity.PrivateKey}'''";
 
         string trimmedContent = content.TrimEnd();
         return $"{trimmedContent}{Environment.NewLine}{Environment.NewLine}{snippet}{Environment.NewLine}";

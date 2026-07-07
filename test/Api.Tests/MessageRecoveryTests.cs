@@ -4,7 +4,6 @@ using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Api.Responses;
 using Core.Dto;
 using Core.Requests.Messages;
@@ -16,8 +15,8 @@ namespace Api.Tests;
 [DoNotParallelize]
 public sealed class MessageRecoveryTests
 {
-    private static readonly string SampleSenderPublicKey = CreateCompositeEnvelope("sender-public-key-mldsa", "sender-public-key-slhdsa");
-    private static readonly string SampleSignature = CreateCompositeEnvelope("signature-mldsa", "signature-slhdsa");
+    private static readonly string SampleSenderPublicKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("sender-public-key-mldsa"));
+    private static readonly string SampleSignature = Convert.ToBase64String(Encoding.UTF8.GetBytes("signature-mldsa"));
     private static readonly string SampleNonce = Convert.ToBase64String(Enumerable.Range(0, 24).Select(static value => (byte)value).ToArray());
 
     [TestMethod]
@@ -223,6 +222,7 @@ public sealed class MessageRecoveryTests
 
             using HttpResponseMessage postResponse = await nodes[0].Client.PostAsJsonAsync("/api/messages", createRequest);
             Assert.AreEqual(HttpStatusCode.OK, postResponse.StatusCode, await nodes[0].FormatFailureAsync("POST /api/messages failed."));
+            await WaitForShardReplicationAsync([nodes[1], nodes[2], nodes[3]], roomHash, expectedDistinctShardCount: 3);
 
             await nodes[0].StopAsync();
 
@@ -360,6 +360,7 @@ public sealed class MessageRecoveryTests
             string expectedCipherText = CreateCipherText("cipher-text-repair");
 
             await CreateMessageAsync(nodes[0], roomHash, expectedCipherText);
+            await WaitForShardReplicationAsync([nodes[1], nodes[2], nodes[3]], roomHash, expectedDistinctShardCount: 3);
 
             await nodes[0].StopAsync();
             await nodes[4].StopAsync();
@@ -661,6 +662,41 @@ public sealed class MessageRecoveryTests
         return response!;
     }
 
+    private static async Task WaitForShardReplicationAsync(
+        IReadOnlyList<ApiNode> nodes,
+        string roomHash,
+        int expectedDistinctShardCount)
+    {
+        await WaitForAsync(
+            async () =>
+            {
+                HashSet<int> distinctShardIndexes = [];
+
+                foreach (ApiNode node in nodes)
+                {
+                    GetMessageShardsResponse? shardResponse = await node.Client.GetFromJsonAsync<GetMessageShardsResponse>(
+                        $"/api/internal/message-shards?roomHash={Uri.EscapeDataString(roomHash)}&maxId={long.MaxValue}&numberToFetch=1");
+
+                    if (shardResponse?.MessageShards is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (int shardIndex in shardResponse.MessageShards
+                        .Where(shard => shard.MessageId > 0)
+                        .Select(shard => shard.ShardIndex))
+                    {
+                        distinctShardIndexes.Add(shardIndex);
+                    }
+                }
+
+                return distinctShardIndexes.Count >= expectedDistinctShardCount;
+            },
+            timeout: TimeSpan.FromSeconds(10),
+            failureMessageFactory: () => Task.FromResult(
+                $"Expected at least {expectedDistinctShardCount} distinct shards for room '{roomHash}' to be replicated before simulating peer loss."));
+    }
+
     private static int GetFreeTcpPort()
     {
         TcpListener listener = new(IPAddress.Loopback, 0);
@@ -749,16 +785,6 @@ public sealed class MessageRecoveryTests
             Signature = SampleSignature,
         };
     }
-
-    private static string CreateCompositeEnvelope(string firstValue, string secondValue)
-    {
-        return JsonSerializer.Serialize(new
-        {
-            mldsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(firstValue)),
-            slhdsa = Convert.ToBase64String(Encoding.UTF8.GetBytes(secondValue))
-        });
-    }
-
     private sealed class ApiNode : IAsyncDisposable
     {
         private readonly string _apiDllPath;

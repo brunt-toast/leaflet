@@ -41,7 +41,7 @@ public class AppContext : DbContext
 
         modelBuilder.Entity<EncryptedMessageEntity>()
             .Property(message => message.Signature)
-            .HasConversion(StorageValueConverters.SignatureEnvelopeConverter)
+            .HasConversion(StorageValueConverters.SignatureConverter)
             .HasColumnType("BLOB");
 
         modelBuilder.Entity<EncryptedMessageEntity>()

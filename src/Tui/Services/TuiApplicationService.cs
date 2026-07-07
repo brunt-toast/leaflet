@@ -62,6 +62,7 @@ internal sealed class TuiApplicationService
         List<PendingLocalMessage> pendingMessages = [];
         List<PendingSendOperation> pendingSendOperations = [];
         bool needsRender = true;
+        TerminalSize terminalSize = GetTerminalSize();
 
         _console.Cursor.Hide();
 
@@ -83,6 +84,13 @@ internal sealed class TuiApplicationService
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
+                    TerminalSize currentTerminalSize = GetTerminalSize();
+                    if (!terminalSize.Equals(currentTerminalSize))
+                    {
+                        terminalSize = currentTerminalSize;
+                        needsRender = true;
+                    }
+
                     if (roomState.Room.Path != selectedRoom.Path)
                     {
                         roomState = RoomViewState.Empty(selectedRoom);
@@ -873,6 +881,24 @@ internal sealed class TuiApplicationService
     {
         return TimeSpan.FromSeconds(Math.Max(_config.Core.RefreshIntervalSeconds * 3, s_minServerDiscoveryCacheDuration.TotalSeconds));
     }
+
+    private TerminalSize GetTerminalSize()
+    {
+        return new TerminalSize(_console.Profile.Width, _console.Profile.Height);
+    }
+}
+
+internal sealed record TerminalSize
+{
+    public TerminalSize(int width, int height)
+    {
+        Width = width;
+        Height = height;
+    }
+
+    public int Width { get; init; }
+
+    public int Height { get; init; }
 }
 
 internal sealed record RoomListEntry

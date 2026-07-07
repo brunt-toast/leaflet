@@ -67,79 +67,102 @@ internal sealed class TuiApplicationService
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            Layout initialLayout = BuildRootLayout(
+                roomEntries,
+                selectedRoom,
+                roomState,
+                composeBuffer,
+                server,
+                lastRefreshAt,
+                pendingMessages);
+
+            await _console
+                .Live(initialLayout)
+                .AutoClear(false)
+                .StartAsync(async context =>
             {
-                if (roomState.Room.Path != selectedRoom.Path)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    roomState = RoomViewState.Empty(selectedRoom);
-                    composeBuffer.Clear();
-                    nextRefreshAt = DateTimeOffset.MinValue;
-                    needsRender = true;
-                }
+                    if (roomState.Room.Path != selectedRoom.Path)
+                    {
+                        roomState = RoomViewState.Empty(selectedRoom);
+                        composeBuffer.Clear();
+                        nextRefreshAt = DateTimeOffset.MinValue;
+                        needsRender = true;
+                    }
 
-                DateTimeOffset now = DateTimeOffset.UtcNow;
-                if (now >= nextServerRefreshAt)
-                {
-                    server = await ResolveServerAsync(cancellationToken);
-                    nextServerRefreshAt = DateTimeOffset.UtcNow.Add(GetServerDiscoveryCacheDuration());
-                }
+                    DateTimeOffset now = DateTimeOffset.UtcNow;
+                    if (now >= nextServerRefreshAt)
+                    {
+                        server = await ResolveServerAsync(cancellationToken);
+                        nextServerRefreshAt = DateTimeOffset.UtcNow.Add(GetServerDiscoveryCacheDuration());
+                    }
 
-                if (now >= nextRefreshAt)
-                {
-                    roomState = await RefreshRoomAsync(selectedRoom, roomState, server, cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(roomState.Error))
+                    if (now >= nextRefreshAt)
+                    {
+                        roomState = await RefreshRoomAsync(selectedRoom, roomState, server, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(roomState.Error))
+                        {
+                            nextServerRefreshAt = DateTimeOffset.MinValue;
+                        }
+
+                        lastRefreshAt = DateTimeOffset.UtcNow;
+                        nextRefreshAt = lastRefreshAt.AddSeconds(_config.Core.RefreshIntervalSeconds);
+                        needsRender = true;
+                    }
+
+                    SendProcessingResult sendProcessingResult = await ProcessCompletedSendOperationsAsync(
+                        selectedRoom,
+                        roomState,
+                        pendingMessages,
+                        pendingSendOperations,
+                        cancellationToken);
+                    roomState = sendProcessingResult.RoomState;
+                    if (sendProcessingResult.ShouldRefreshImmediately)
+                    {
+                        nextRefreshAt = DateTimeOffset.MinValue;
+                    }
+
+                    if (sendProcessingResult.ShouldRefreshServer)
                     {
                         nextServerRefreshAt = DateTimeOffset.MinValue;
                     }
 
-                    lastRefreshAt = DateTimeOffset.UtcNow;
-                    nextRefreshAt = lastRefreshAt.AddSeconds(_config.Core.RefreshIntervalSeconds);
-                    needsRender = true;
+                    needsRender |= sendProcessingResult.Handled;
+
+                    InputResult inputResult = await HandleInputAsync(
+                        roomEntries,
+                        selectedRoom,
+                        composeBuffer,
+                        roomState,
+                        nextRefreshAt,
+                        server,
+                        pendingMessages,
+                        pendingSendOperations,
+                        cancellationToken);
+
+                    selectedRoom = inputResult.SelectedRoom;
+                    roomState = inputResult.RoomState;
+                    nextRefreshAt = inputResult.NextRefreshAt;
+                    needsRender |= inputResult.Handled;
+
+                    if (needsRender)
+                    {
+                        Render(
+                            context,
+                            roomEntries,
+                            selectedRoom,
+                            roomState,
+                            composeBuffer,
+                            server,
+                            lastRefreshAt,
+                            pendingMessages);
+                        needsRender = false;
+                    }
+
+                    await Task.Delay(s_inputPollInterval, cancellationToken);
                 }
-
-                SendProcessingResult sendProcessingResult = await ProcessCompletedSendOperationsAsync(
-                    selectedRoom,
-                    roomState,
-                    pendingMessages,
-                    pendingSendOperations,
-                    cancellationToken);
-                roomState = sendProcessingResult.RoomState;
-                if (sendProcessingResult.ShouldRefreshImmediately)
-                {
-                    nextRefreshAt = DateTimeOffset.MinValue;
-                }
-
-                if (sendProcessingResult.ShouldRefreshServer)
-                {
-                    nextServerRefreshAt = DateTimeOffset.MinValue;
-                }
-
-                needsRender |= sendProcessingResult.Handled;
-
-                InputResult inputResult = await HandleInputAsync(
-                    roomEntries,
-                    selectedRoom,
-                    composeBuffer,
-                    roomState,
-                    nextRefreshAt,
-                    server,
-                    pendingMessages,
-                    pendingSendOperations,
-                    cancellationToken);
-
-                selectedRoom = inputResult.SelectedRoom;
-                roomState = inputResult.RoomState;
-                nextRefreshAt = inputResult.NextRefreshAt;
-                needsRender |= inputResult.Handled;
-
-                if (needsRender)
-                {
-                    Render(roomEntries, selectedRoom, roomState, composeBuffer, server, lastRefreshAt, pendingMessages);
-                    needsRender = false;
-                }
-
-                await Task.Delay(s_inputPollInterval, cancellationToken);
-            }
+            });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -443,6 +466,27 @@ internal sealed class TuiApplicationService
     }
 
     private void Render(
+        LiveDisplayContext context,
+        IReadOnlyList<RoomListEntry> roomEntries,
+        RoomLeafNode selectedRoom,
+        RoomViewState roomState,
+        StringBuilder composeBuffer,
+        ServerConfig server,
+        DateTimeOffset lastRefreshAt,
+        IReadOnlyList<PendingLocalMessage> pendingMessages)
+    {
+        context.UpdateTarget(BuildRootLayout(
+            roomEntries,
+            selectedRoom,
+            roomState,
+            composeBuffer,
+            server,
+            lastRefreshAt,
+            pendingMessages));
+        context.Refresh();
+    }
+
+    private Layout BuildRootLayout(
         IReadOnlyList<RoomListEntry> roomEntries,
         RoomLeafNode selectedRoom,
         RoomViewState roomState,
@@ -470,8 +514,7 @@ internal sealed class TuiApplicationService
         mainLayout["Messages"].Update(BuildMessagesPanel(roomState, pendingMessages));
         mainLayout["Compose"].Update(BuildComposePanel(composeBuffer));
 
-        _console.Clear();
-        _console.Write(root);
+        return root;
     }
 
     private Panel BuildRoomsPanel(IReadOnlyList<RoomListEntry> roomEntries, RoomLeafNode selectedRoom)

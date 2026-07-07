@@ -12,6 +12,11 @@ internal sealed class TuiApplicationService
 {
     private static readonly TimeSpan s_inputPollInterval = TimeSpan.FromMilliseconds(40);
     private static readonly TimeSpan s_minServerDiscoveryCacheDuration = TimeSpan.FromSeconds(30);
+    private const int RoomsPanelWidth = 32;
+    private const int HeaderPanelHeight = 5;
+    private const int ComposePanelHeight = 7;
+    private const int PanelBorderPaddingWidth = 4;
+    private const int MessageBodyIndentWidth = 4;
     private readonly TuiAppConfig _config;
     private readonly MessagingApiClientService _apiClient;
     private readonly ServerDiscoveryService _serverDiscoveryService;
@@ -450,16 +455,16 @@ internal sealed class TuiApplicationService
 
         Layout root = new("Root");
         root.SplitColumns(
-            new Layout("Rooms").Size(32),
+            new Layout("Rooms").Size(RoomsPanelWidth),
             new Layout("Main"));
 
         root["Rooms"].Update(BuildRoomsPanel(roomEntries, selectedRoom));
 
         Layout mainLayout = root["Main"];
         mainLayout.SplitRows(
-            new Layout("Header").Size(5),
+            new Layout("Header").Size(HeaderPanelHeight),
             new Layout("Messages"),
-            new Layout("Compose").Size(7));
+            new Layout("Compose").Size(ComposePanelHeight));
 
         mainLayout["Header"].Update(BuildHeaderPanel(selectedRoom, identity, server, roomState, lastRefreshAt));
         mainLayout["Messages"].Update(BuildMessagesPanel(roomState, pendingMessages));
@@ -550,8 +555,9 @@ internal sealed class TuiApplicationService
         }
 
         IReadOnlyList<RenderedMessage> messages = GetVisibleMessages(roomState, pendingMessages);
+        IReadOnlyList<RenderedMessage> viewportMessages = TakeMessagesThatFitViewport(messages);
 
-        if (messages.Count == 0)
+        if (viewportMessages.Count == 0)
         {
             return new Panel(new Markup("[grey]No messages yet.[/]"))
             {
@@ -563,7 +569,7 @@ internal sealed class TuiApplicationService
 
         List<IRenderable> chatRows = [];
 
-        foreach (RenderedMessage message in messages)
+        foreach (RenderedMessage message in viewportMessages)
         {
             chatRows.Add(BuildMessageMetadataLine(message));
             chatRows.Add(BuildIndentedMessageBody(message));
@@ -725,6 +731,99 @@ internal sealed class TuiApplicationService
             .Concat(roomPendingMessages)
             .OrderBy(message => message.SentAtUtc)
             .ToArray();
+    }
+
+    private IReadOnlyList<RenderedMessage> TakeMessagesThatFitViewport(IReadOnlyList<RenderedMessage> messages)
+    {
+        int availableRows = GetAvailableMessageRows();
+        if (messages.Count == 0 || availableRows <= 0)
+        {
+            return [];
+        }
+
+        int contentWidth = GetMessageContentWidth();
+        List<RenderedMessage> visibleMessages = [];
+        int usedRows = 0;
+
+        for (int index = messages.Count - 1; index >= 0; index--)
+        {
+            RenderedMessage message = messages[index];
+            int messageRows = EstimateMessageRowCount(message, contentWidth);
+
+            if (visibleMessages.Count > 0 && usedRows + messageRows > availableRows)
+            {
+                break;
+            }
+
+            visibleMessages.Add(message);
+            usedRows += messageRows;
+
+            if (usedRows >= availableRows)
+            {
+                break;
+            }
+        }
+
+        visibleMessages.Reverse();
+        return visibleMessages;
+    }
+
+    private int GetAvailableMessageRows()
+    {
+        int consoleHeight = _console.Profile.Height;
+        int reservedRows = HeaderPanelHeight + ComposePanelHeight;
+        int availableRows = consoleHeight - reservedRows - 2;
+        return Math.Max(1, availableRows);
+    }
+
+    private int GetMessageContentWidth()
+    {
+        int consoleWidth = _console.Profile.Width;
+        int mainPanelWidth = consoleWidth - RoomsPanelWidth - 1;
+        int contentWidth = mainPanelWidth - PanelBorderPaddingWidth - MessageBodyIndentWidth;
+        return Math.Max(12, contentWidth);
+    }
+
+    private static int EstimateMessageRowCount(RenderedMessage message, int contentWidth)
+    {
+        int metadataRows = EstimateWrappedLineCount(BuildMetadataText(message), contentWidth);
+        int bodyRows = EstimateWrappedLineCount(message.Body, contentWidth);
+        return Math.Max(1, metadataRows) + Math.Max(1, bodyRows);
+    }
+
+    private static int EstimateWrappedLineCount(string text, int contentWidth)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 1;
+        }
+
+        int lineCount = 0;
+
+        foreach (string line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            int lineLength = Math.Max(1, line.Length);
+            lineCount += (int)Math.Ceiling(lineLength / (double)contentWidth);
+        }
+
+        return Math.Max(1, lineCount);
+    }
+
+    private static string BuildMetadataText(RenderedMessage message)
+    {
+        string timestamp = FormatMessageTimestamp(message.SentAtUtc);
+        string statusSuffix = message.DeliveryFailed
+            ? " (failed)"
+            : message.IsPending
+                ? " (sending...)"
+                : string.Empty;
+
+        if (string.IsNullOrWhiteSpace(message.SenderKeyHash))
+        {
+            return $"{timestamp} {message.Sender}{statusSuffix}";
+        }
+
+        return $"{timestamp} {message.Sender} {message.SenderKeyHash}{statusSuffix}";
     }
 
     private TimeSpan GetServerDiscoveryCacheDuration()

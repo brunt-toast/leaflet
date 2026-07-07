@@ -11,6 +11,7 @@ namespace Tui.Services;
 internal sealed class TuiApplicationService
 {
     private static readonly TimeSpan s_inputPollInterval = TimeSpan.FromMilliseconds(40);
+    private static readonly TimeSpan s_minServerDiscoveryCacheDuration = TimeSpan.FromSeconds(30);
     private readonly TuiAppConfig _config;
     private readonly MessagingApiClientService _apiClient;
     private readonly ServerDiscoveryService _serverDiscoveryService;
@@ -37,6 +38,7 @@ internal sealed class TuiApplicationService
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         ServerConfig server = await ResolveServerAsync(cancellationToken);
+        DateTimeOffset nextServerRefreshAt = DateTimeOffset.UtcNow.Add(GetServerDiscoveryCacheDuration());
         IReadOnlyList<RoomListEntry> roomEntries = BuildRoomEntries(_config.RoomsRoot);
         RoomListEntry? initiallySelectedRoom = roomEntries.FirstOrDefault(static entry => entry.Room is not null);
 
@@ -71,10 +73,20 @@ internal sealed class TuiApplicationService
                 }
 
                 DateTimeOffset now = DateTimeOffset.UtcNow;
-                if (now >= nextRefreshAt)
+                if (now >= nextServerRefreshAt)
                 {
                     server = await ResolveServerAsync(cancellationToken);
+                    nextServerRefreshAt = DateTimeOffset.UtcNow.Add(GetServerDiscoveryCacheDuration());
+                }
+
+                if (now >= nextRefreshAt)
+                {
                     roomState = await RefreshRoomAsync(selectedRoom, roomState, server, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(roomState.Error))
+                    {
+                        nextServerRefreshAt = DateTimeOffset.MinValue;
+                    }
+
                     lastRefreshAt = DateTimeOffset.UtcNow;
                     nextRefreshAt = lastRefreshAt.AddSeconds(_config.Core.RefreshIntervalSeconds);
                     needsRender = true;
@@ -90,6 +102,11 @@ internal sealed class TuiApplicationService
                 if (sendProcessingResult.ShouldRefreshImmediately)
                 {
                     nextRefreshAt = DateTimeOffset.MinValue;
+                }
+
+                if (sendProcessingResult.ShouldRefreshServer)
+                {
+                    nextServerRefreshAt = DateTimeOffset.MinValue;
                 }
 
                 needsRender |= sendProcessingResult.Handled;
@@ -237,6 +254,7 @@ internal sealed class TuiApplicationService
     {
         bool handled = false;
         bool shouldRefreshImmediately = false;
+        bool shouldRefreshServer = false;
 
         for (int index = pendingSendOperations.Count - 1; index >= 0; index--)
         {
@@ -299,9 +317,11 @@ internal sealed class TuiApplicationService
                     Status = $"Send failed: {completionResult.ErrorMessage}"
                 };
             }
+
+            shouldRefreshServer = true;
         }
 
-        return new SendProcessingResult(roomState, handled, shouldRefreshImmediately);
+        return new SendProcessingResult(roomState, handled, shouldRefreshImmediately, shouldRefreshServer);
     }
 
     private async Task<RoomViewState> RefreshRoomAsync(
@@ -405,7 +425,6 @@ internal sealed class TuiApplicationService
     {
         try
         {
-            server = await ResolveServerAsync(cancellationToken);
             EncryptedMessageDto dto = _cryptoService.CreateEncryptedMessage(room, identity, text);
             await _apiClient.SendMessageAsync(server, dto, cancellationToken);
             _logger.LogInformation("Sent message for room {RoomPath} via server {ServerUrl}.", room.Path, server.Url);
@@ -707,6 +726,11 @@ internal sealed class TuiApplicationService
             .OrderBy(message => message.SentAtUtc)
             .ToArray();
     }
+
+    private TimeSpan GetServerDiscoveryCacheDuration()
+    {
+        return TimeSpan.FromSeconds(Math.Max(_config.Core.RefreshIntervalSeconds * 3, s_minServerDiscoveryCacheDuration.TotalSeconds));
+    }
 }
 
 internal sealed record RoomListEntry
@@ -824,11 +848,12 @@ internal sealed record SendStartResult
 
 internal sealed record SendProcessingResult
 {
-    public SendProcessingResult(RoomViewState roomState, bool handled, bool shouldRefreshImmediately)
+    public SendProcessingResult(RoomViewState roomState, bool handled, bool shouldRefreshImmediately, bool shouldRefreshServer)
     {
         RoomState = roomState;
         Handled = handled;
         ShouldRefreshImmediately = shouldRefreshImmediately;
+        ShouldRefreshServer = shouldRefreshServer;
     }
 
     public RoomViewState RoomState { get; init; }
@@ -836,6 +861,8 @@ internal sealed record SendProcessingResult
     public bool Handled { get; init; }
 
     public bool ShouldRefreshImmediately { get; init; }
+
+    public bool ShouldRefreshServer { get; init; }
 }
 
 internal sealed record SendCompletionResult

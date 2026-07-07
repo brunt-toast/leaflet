@@ -4,6 +4,7 @@ internal sealed class TuiAppConfig
 {
     public TuiCoreConfig Core { get; set; } = new();
     public TuiLoggingConfig Logging { get; set; } = new();
+    public TuiMessageFilterConfig Filters { get; set; } = new();
     public IReadOnlyDictionary<string, IdentityConfig> Identities { get; set; } = new Dictionary<string, IdentityConfig>();
     public ServerClusterConfig Servers { get; set; } = new();
     public RoomGroupNode RoomsRoot { get; set; } = new()
@@ -25,6 +26,12 @@ internal sealed class TuiLoggingConfig
     public string FilePath { get; init; } = "logs/tui-.log";
     public string MinimumLevel { get; init; } = "Information";
     public string MicrosoftMinimumLevel { get; init; } = "Warning";
+}
+
+internal sealed class TuiMessageFilterConfig
+{
+    public IReadOnlyList<string> MessageContentRegexes { get; init; } = [];
+    public IReadOnlyList<string> PublicKeyFriendlyHashes { get; init; } = [];
 }
 
 internal sealed class IdentityConfig

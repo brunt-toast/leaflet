@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using System.Text.RegularExpressions;
 
 namespace Tui.Configuration;
 
@@ -25,10 +26,35 @@ internal sealed class ConfigureTuiAppConfigOptions : IConfigureOptions<TuiAppCon
             MinimumLevel = _configuration.GetValue("logging:minimum_level", "Information") ?? "Information",
             MicrosoftMinimumLevel = _configuration.GetValue("logging:microsoft_minimum_level", "Warning") ?? "Warning"
         };
+        options.Filters = BuildFilters();
 
         options.Identities = BuildIdentities();
         options.Servers = BuildServers();
         options.RoomsRoot = BuildRooms();
+    }
+
+    private TuiMessageFilterConfig BuildFilters()
+    {
+        IConfigurationSection filtersSection = _configuration.GetSection("filters");
+        if (!filtersSection.Exists())
+        {
+            return new TuiMessageFilterConfig();
+        }
+
+        string[] messageContentRegexes = filtersSection.GetSection("message_content_regexes").Get<string[]>() ?? [];
+        string[] publicKeyFriendlyHashes = filtersSection.GetSection("public_key_friendly_hashes").Get<string[]>() ?? [];
+
+        ValidateRegexes(messageContentRegexes);
+
+        return new TuiMessageFilterConfig
+        {
+            MessageContentRegexes = messageContentRegexes
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray(),
+            PublicKeyFriendlyHashes = publicKeyFriendlyHashes
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray()
+        };
     }
 
     private IReadOnlyDictionary<string, IdentityConfig> BuildIdentities()
@@ -154,5 +180,20 @@ internal sealed class ConfigureTuiAppConfigOptions : IConfigureOptions<TuiAppCon
         }
 
         throw new InvalidOperationException($"Missing required string '{key}' at [{path}].");
+    }
+
+    private static void ValidateRegexes(IEnumerable<string> patterns)
+    {
+        foreach (string pattern in patterns.Where(static value => !string.IsNullOrWhiteSpace(value)))
+        {
+            try
+            {
+                _ = new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException($"Invalid regex in [filters.message_content_regexes]: '{pattern}'.", ex);
+            }
+        }
     }
 }

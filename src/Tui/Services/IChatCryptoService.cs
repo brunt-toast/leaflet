@@ -21,4 +21,5 @@ internal sealed class RenderedMessage
     public required bool IsError { get; init; }
     public bool IsPending { get; init; }
     public bool DeliveryFailed { get; init; }
+    public bool IsHidden { get; init; }
 }

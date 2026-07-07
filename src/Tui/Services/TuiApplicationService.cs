@@ -18,6 +18,7 @@ internal sealed class TuiApplicationService
     private const int PanelBorderPaddingWidth = 4;
     private const int MessageBodyIndentWidth = 4;
     private readonly TuiAppConfig _config;
+    private readonly MessageVisibilityFilter _messageVisibilityFilter;
     private readonly MessagingApiClientService _apiClient;
     private readonly ServerDiscoveryService _serverDiscoveryService;
     private readonly IChatCryptoService _cryptoService;
@@ -33,6 +34,7 @@ internal sealed class TuiApplicationService
         ILogger<TuiApplicationService> logger)
     {
         _config = configOptions.Value;
+        _messageVisibilityFilter = new MessageVisibilityFilter(_config.Filters);
         _apiClient = apiClient;
         _serverDiscoveryService = serverDiscoveryService;
         _cryptoService = cryptoService;
@@ -622,6 +624,12 @@ internal sealed class TuiApplicationService
 
         foreach (RenderedMessage message in viewportMessages)
         {
+            if (message.IsHidden)
+            {
+                chatRows.Add(BuildHiddenMessageLine(message));
+                continue;
+            }
+
             chatRows.Add(BuildMessageMetadataLine(message));
             chatRows.Add(BuildIndentedMessageBody(message));
         }
@@ -753,6 +761,11 @@ internal sealed class TuiApplicationService
         return grid;
     }
 
+    private static IRenderable BuildHiddenMessageLine(RenderedMessage message)
+    {
+        return new Markup($"[grey]{Markup.Escape(message.Body)}[/]");
+    }
+
     private static RenderedMessage CreatePendingMessage(IdentityConfig identity, string text, string localId)
     {
         return new RenderedMessage
@@ -769,7 +782,7 @@ internal sealed class TuiApplicationService
         };
     }
 
-    private static IReadOnlyList<RenderedMessage> GetVisibleMessages(
+    private IReadOnlyList<RenderedMessage> GetVisibleMessages(
         RoomViewState roomState,
         IReadOnlyList<PendingLocalMessage> pendingMessages)
     {
@@ -781,6 +794,7 @@ internal sealed class TuiApplicationService
         return roomState.Messages
             .Concat(roomPendingMessages)
             .OrderBy(message => message.SentAtUtc)
+            .Select(message => _messageVisibilityFilter.Apply(message))
             .ToArray();
     }
 
@@ -837,6 +851,11 @@ internal sealed class TuiApplicationService
 
     private static int EstimateMessageRowCount(RenderedMessage message, int contentWidth)
     {
+        if (message.IsHidden)
+        {
+            return Math.Max(1, EstimateWrappedLineCount(message.Body, contentWidth));
+        }
+
         int metadataRows = EstimateWrappedLineCount(BuildMetadataText(message), contentWidth);
         int bodyRows = EstimateWrappedLineCount(message.Body, contentWidth);
         return Math.Max(1, metadataRows) + Math.Max(1, bodyRows);

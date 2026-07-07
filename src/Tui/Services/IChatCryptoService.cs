@@ -12,7 +12,7 @@ internal interface IChatCryptoService
 
 internal sealed class RenderedMessage
 {
-    public required string Timestamp { get; init; }
+    public required DateTimeOffset SentAtUtc { get; init; }
     public required string Sender { get; init; }
     public required string Body { get; init; }
     public required bool IsVerified { get; init; }

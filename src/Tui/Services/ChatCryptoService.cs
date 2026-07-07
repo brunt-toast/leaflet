@@ -26,14 +26,20 @@ internal sealed class ChatCryptoService : IChatCryptoService
     {
         byte[] roomKey = DeriveEncryptionKey(room.Key);
         byte[] nonce = SecretAeadXChaCha20Poly1305.GenerateNonce();
-        RoomMessagePayload payload = new()
+        RoomMessageEnvelope envelope = new()
         {
-            SenderName = identity.Name,
-            Text = text,
-            SentAtUtc = DateTimeOffset.UtcNow
+            Content = new RoomMessageContent
+            {
+                Text = text
+            },
+            Metadata = new RoomMessageMetadata
+            {
+                SenderName = identity.Name,
+                SentAtUtc = DateTimeOffset.UtcNow
+            }
         };
 
-        byte[] plaintext = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload));
+        byte[] plaintext = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(envelope));
         byte[] cipherText = SecretAeadXChaCha20Poly1305.Encrypt(plaintext, nonce, roomKey, []);
         string roomHash = ComputeRoomHash(room.Key);
         byte[] signaturePayload = BuildSignaturePayload(roomHash, nonce, cipherText, identity.PublicKey);
@@ -58,19 +64,14 @@ internal sealed class ChatCryptoService : IChatCryptoService
             byte[] nonce = Convert.FromBase64String(message.Nonce);
             byte[] cipherText = Convert.FromBase64String(message.CypherText);
             byte[] plaintext = SecretAeadXChaCha20Poly1305.Decrypt(cipherText, nonce, roomKey, []);
-            RoomMessagePayload? payload = JsonConvert.DeserializeObject<RoomMessagePayload>(Encoding.UTF8.GetString(plaintext));
-            if (payload is null)
-            {
-                throw new InvalidOperationException("Message payload was null.");
-            }
+            DecodedRoomMessage payload = DecodePayload(Encoding.UTF8.GetString(plaintext));
 
             byte[] signaturePayload = BuildSignaturePayload(message.RoomHash, nonce, cipherText, message.SenderPublicKey);
             bool isVerified = Verify(signaturePayload, message.Signature, message.SenderPublicKey);
-            string timestamp = payload.SentAtUtc.ToLocalTime().ToString("u");
 
             return new RenderedMessage
             {
-                Timestamp = timestamp,
+                SentAtUtc = payload.SentAtUtc,
                 Sender = payload.SenderName,
                 Body = payload.Text,
                 IsVerified = isVerified,
@@ -81,13 +82,36 @@ internal sealed class ChatCryptoService : IChatCryptoService
         {
             return new RenderedMessage
             {
-                Timestamp = DateTimeOffset.Now.ToString("u"),
+                SentAtUtc = DateTimeOffset.UtcNow,
                 Sender = "system",
                 Body = ex.Message,
                 IsVerified = false,
                 IsError = true
             };
         }
+    }
+
+    private static DecodedRoomMessage DecodePayload(string json)
+    {
+        RoomMessageEnvelope? envelope = JsonConvert.DeserializeObject<RoomMessageEnvelope>(json);
+        if (envelope?.Content is not null && envelope.Metadata is not null)
+        {
+            return new DecodedRoomMessage(
+                envelope.Metadata.SenderName,
+                envelope.Content.Text,
+                envelope.Metadata.SentAtUtc);
+        }
+
+        LegacyRoomMessagePayload? legacyPayload = JsonConvert.DeserializeObject<LegacyRoomMessagePayload>(json);
+        if (legacyPayload is not null)
+        {
+            return new DecodedRoomMessage(
+                legacyPayload.SenderName,
+                legacyPayload.Text,
+                legacyPayload.SentAtUtc);
+        }
+
+        throw new InvalidOperationException("Message payload was null.");
     }
 
     private static byte[] BuildSignaturePayload(string roomHash, byte[] nonce, byte[] cipherText, string senderPublicKey)
@@ -219,14 +243,18 @@ internal sealed class ChatCryptoService : IChatCryptoService
     }
 }
 
-internal sealed class RoomMessagePayload
+internal sealed record DecodedRoomMessage
 {
-    [JsonProperty("sender_name")]
-    public required string SenderName { get; init; }
+    public DecodedRoomMessage(string senderName, string text, DateTimeOffset sentAtUtc)
+    {
+        SenderName = senderName;
+        Text = text;
+        SentAtUtc = sentAtUtc;
+    }
 
-    [JsonProperty("text")]
-    public required string Text { get; init; }
+    public string SenderName { get; init; }
 
-    [JsonProperty("sent_at_utc")]
-    public required DateTimeOffset SentAtUtc { get; init; }
+    public string Text { get; init; }
+
+    public DateTimeOffset SentAtUtc { get; init; }
 }

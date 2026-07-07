@@ -412,7 +412,7 @@ internal sealed class TuiApplicationService
         foreach (RenderedMessage message in roomState.Messages)
         {
             grid.AddRow(
-                new Markup($"[grey]{Markup.Escape(message.Timestamp)}[/]"),
+                new Markup($"[grey]{Markup.Escape(FormatMessageTimestamp(message.SentAtUtc))}[/]"),
                 new Text(PadSender(message.Sender, senderColumnWidth), new Style(Color.Blue)),
                 BuildMessageBody(message));
         }
@@ -489,6 +489,11 @@ internal sealed class TuiApplicationService
     private static string PadSender(string sender, int senderColumnWidth)
     {
         return sender.PadLeft(senderColumnWidth);
+    }
+
+    private static string FormatMessageTimestamp(DateTimeOffset sentAtUtc)
+    {
+        return sentAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     }
 
     private static IRenderable BuildMessageBody(RenderedMessage message)

@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="test/Api.Tests/Api.Tests.csproj" Id="f7ad1066-e80c-465e-9fd5-68116eec5a97" />
+    <Project Path="test/Tui.Tests/Tui.Tests.csproj" />
   </Folder>
   <Project Path="src/Api/Api.csproj" Id="a21cad04-ada2-47c9-8cd4-f7c1d5e9a312" />
   <Project Path="src/Core/Core.csproj" Id="bd63098e-c486-486e-b563-83276be64a0a" />

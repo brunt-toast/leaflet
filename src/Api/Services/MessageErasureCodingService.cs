@@ -38,19 +38,31 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         _logger = logger;
     }
 
-    public async Task EnsureMessagesAvailableAsync(string roomHash, long maxId, int numberToFetch, CancellationToken cancellationToken)
+    public async Task EnsureMessagesAvailableAsync(
+        string roomHash,
+        long maxId,
+        int numberToFetch,
+        long? sinceId,
+        CancellationToken cancellationToken)
     {
-        int localCount = await _appContext.EncryptedMessages
-            .Where(message => message.RoomHash == roomHash && message.Id <= maxId)
-            .CountAsync(cancellationToken);
+        IQueryable<EncryptedMessageEntity> localQuery = _appContext.EncryptedMessages
+            .Where(message => message.RoomHash == roomHash && message.Id <= maxId);
+
+        if (sinceId.HasValue)
+        {
+            long lowerBoundId = sinceId.Value;
+            localQuery = localQuery.Where(message => message.Id > lowerBoundId);
+        }
+
+        int localCount = await localQuery.CountAsync(cancellationToken);
 
         if (localCount >= numberToFetch)
         {
             return;
         }
 
-        MessageShardDto[] localShards = await GetLocalStoredMessageShardsAsync(roomHash, maxId, numberToFetch, cancellationToken);
-        MessageShardDto[] remoteShards = await FetchRemoteShardsAsync(roomHash, maxId, numberToFetch, cancellationToken);
+        MessageShardDto[] localShards = await GetLocalStoredMessageShardsAsync(roomHash, maxId, numberToFetch, sinceId, cancellationToken);
+        MessageShardDto[] remoteShards = await FetchRemoteShardsAsync(roomHash, maxId, numberToFetch, sinceId, cancellationToken);
         MessageShardDto[] availableShards = localShards
             .Concat(remoteShards)
             .ToArray();
@@ -60,8 +72,7 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
             return;
         }
 
-        HashSet<long> existingMessageIds = await _appContext.EncryptedMessages
-            .Where(message => message.RoomHash == roomHash && message.Id <= maxId)
+        HashSet<long> existingMessageIds = await localQuery
             .Select(message => message.Id)
             .ToHashSetAsync(cancellationToken);
 
@@ -299,20 +310,29 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         string roomHash,
         long maxId,
         int numberToFetch,
+        long? sinceId,
         CancellationToken cancellationToken)
     {
         int totalShardCount = _erasureCodingOptions.DataShards + _erasureCodingOptions.ParityShards;
 
-        long[] messageIds = await _appContext.MessageShards
-            .Where(shard => shard.RoomHash == roomHash && shard.MessageId <= maxId)
+        IQueryable<MessageShardEntity> shardQuery = _appContext.MessageShards
+            .Where(shard => shard.RoomHash == roomHash && shard.MessageId <= maxId);
+
+        if (sinceId.HasValue)
+        {
+            long lowerBoundId = sinceId.Value;
+            shardQuery = shardQuery.Where(shard => shard.MessageId > lowerBoundId);
+        }
+
+        long[] messageIds = await shardQuery
             .Select(shard => shard.MessageId)
             .Distinct()
             .OrderByDescending(messageId => messageId)
             .Take(numberToFetch)
             .ToArrayAsync(cancellationToken);
 
-        MessageShardDto[] shards = await _appContext.MessageShards
-            .Where(shard => shard.RoomHash == roomHash && messageIds.Contains(shard.MessageId))
+        MessageShardDto[] shards = await shardQuery
+            .Where(shard => messageIds.Contains(shard.MessageId))
             .OrderByDescending(shard => shard.MessageId)
             .ThenBy(shard => shard.ShardIndex)
             .Take(numberToFetch * totalShardCount)
@@ -334,7 +354,12 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         };
     }
 
-    private async Task<MessageShardDto[]> FetchRemoteShardsAsync(string roomHash, long maxId, int numberToFetch, CancellationToken cancellationToken)
+    private async Task<MessageShardDto[]> FetchRemoteShardsAsync(
+        string roomHash,
+        long maxId,
+        int numberToFetch,
+        long? sinceId,
+        CancellationToken cancellationToken)
     {
         string? publicUrl = TryNormalizeUrl(_peerSyncOptions.PublicUrl);
         string[] peerUrls = await _appContext.KnownServers
@@ -354,6 +379,10 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
                 HttpClient client = _httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
                 string requestUri =
                     $"{peerUrl}{MessageShardsEndpointPath}?roomHash={Uri.EscapeDataString(roomHash)}&maxId={maxId}&numberToFetch={numberToFetch}";
+                if (sinceId.HasValue)
+                {
+                    requestUri = $"{requestUri}&sinceId={sinceId.Value}";
+                }
 
                 GetMessageShardsResponse? response = await client.GetFromJsonAsync<GetMessageShardsResponse>(requestUri, cancellationToken);
                 if (response?.MessageShards is not null)
@@ -375,7 +404,7 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         long messageId,
         CancellationToken cancellationToken)
     {
-        MessageShardDto[] shards = await FetchRemoteShardsAsync(roomHash, messageId, numberToFetch: 1, cancellationToken);
+        MessageShardDto[] shards = await FetchRemoteShardsAsync(roomHash, messageId, numberToFetch: 1, sinceId: null, cancellationToken);
         return shards
             .Where(shard => shard.MessageId == messageId)
             .ToArray();
@@ -385,9 +414,10 @@ internal sealed class MessageErasureCodingService : IMessageErasureCodingService
         string roomHash,
         long maxId,
         int numberToFetch,
+        long? sinceId,
         CancellationToken cancellationToken)
     {
-        return (await GetStoredMessageShardsAsync(roomHash, maxId, numberToFetch, cancellationToken)).MessageShards;
+        return (await GetStoredMessageShardsAsync(roomHash, maxId, numberToFetch, sinceId, cancellationToken)).MessageShards;
     }
 
     private async Task<MessageShardDto[]> GetLocalStoredExactMessageShardsAsync(

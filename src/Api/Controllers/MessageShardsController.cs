@@ -22,12 +22,14 @@ public sealed class MessageShardsController : ControllerBase
         [FromQuery] string roomHash,
         [FromQuery] long maxId,
         [FromQuery] int numberToFetch,
+        [FromQuery] long? sinceId,
         CancellationToken cancellationToken)
     {
         return Ok(await _messageErasureCodingService.GetStoredMessageShardsAsync(
             roomHash,
             maxId,
             numberToFetch,
+            sinceId,
             cancellationToken));
     }
 

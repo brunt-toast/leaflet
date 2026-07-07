@@ -25,10 +25,15 @@ internal sealed class MessagingApiClientService
         ServerConfig server,
         string roomHash,
         int numberToFetch,
+        long? sinceId,
         CancellationToken cancellationToken)
     {
         string requestUri =
             $"{server.Url.TrimEnd('/')}/api/messages?roomHash={Uri.EscapeDataString(roomHash)}&maxId={long.MaxValue}&numberToFetch={numberToFetch}";
+        if (sinceId.HasValue)
+        {
+            requestUri = $"{requestUri}&sinceId={sinceId.Value}";
+        }
 
         using HttpResponseMessage response = await _httpClient.GetAsync(requestUri, cancellationToken);
         response.EnsureSuccessStatusCode();

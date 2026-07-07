@@ -313,22 +313,33 @@ internal sealed class TuiApplicationService
         try
         {
             string roomHash = _cryptoService.ComputeRoomHash(room.Key);
+            long? sinceId = currentState.LastMessageId > 0 ? currentState.LastMessageId : null;
             IReadOnlyList<EncryptedMessageDto> messages = await _apiClient.GetMessagesAsync(
                 server,
                 roomHash,
                 _config.Core.HistoryCount,
+                sinceId,
                 cancellationToken);
 
             IReadOnlyList<RenderedMessage> renderedMessages = messages
                 .Select(message => _cryptoService.TryReadMessage(room, message))
                 .ToArray();
+            IReadOnlyList<RenderedMessage> mergedMessages = sinceId.HasValue
+                ? currentState.Messages
+                    .Concat(renderedMessages)
+                    .TakeLast(_config.Core.HistoryCount)
+                    .ToArray()
+                : renderedMessages;
+            long lastMessageId = messages.Count > 0
+                ? messages.Max(message => message.Id)
+                : currentState.LastMessageId;
 
             _logger.LogInformation(
                 "Refreshed room {RoomPath} from server {ServerUrl} with {MessageCount} messages.",
                 room.Path,
                 server.Url,
                 renderedMessages.Count);
-            return new RoomViewState(room, renderedMessages, null, $"Synced {renderedMessages.Count} message(s).");
+            return new RoomViewState(room, mergedMessages, null, $"Synced {renderedMessages.Count} new message(s).", lastMessageId);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -720,12 +731,14 @@ internal sealed record RoomViewState
         RoomLeafNode room,
         IReadOnlyList<RenderedMessage> messages,
         string? error,
-        string status)
+        string status,
+        long lastMessageId)
     {
         Room = room;
         Messages = messages;
         Error = error;
         Status = status;
+        LastMessageId = lastMessageId;
     }
 
     public RoomLeafNode Room { get; init; }
@@ -736,7 +749,9 @@ internal sealed record RoomViewState
 
     public string Status { get; init; }
 
-    public static RoomViewState Empty(RoomLeafNode room) => new(room, [], null, "Ready.");
+    public long LastMessageId { get; init; }
+
+    public static RoomViewState Empty(RoomLeafNode room) => new(room, [], null, "Ready.", 0);
 }
 
 internal sealed record InputResult

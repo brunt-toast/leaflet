@@ -46,10 +46,19 @@ public sealed class MessagesController : ControllerBase
             request.RoomHash,
             request.MaxId,
             request.NumberToFetch,
+            request.SinceId,
             cancellationToken);
 
-        EncryptedMessageDto[] messages = await _appContext.EncryptedMessages
-            .Where(message => message.RoomHash == request.RoomHash && message.Id <= request.MaxId)
+        IQueryable<EncryptedMessageEntity> query = _appContext.EncryptedMessages
+            .Where(message => message.RoomHash == request.RoomHash && message.Id <= request.MaxId);
+
+        if (request.SinceId.HasValue)
+        {
+            long sinceId = request.SinceId.Value;
+            query = query.Where(message => message.Id > sinceId);
+        }
+
+        EncryptedMessageDto[] messages = await query
             .OrderByDescending(message => message.Id)
             .Take(request.NumberToFetch)
             .Select(message => new EncryptedMessageDto

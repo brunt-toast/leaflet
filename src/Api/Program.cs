@@ -83,11 +83,13 @@ public class Program
         {
             client.Timeout = TimeSpan.FromSeconds(10);
         });
+        builder.Services.AddSingleton<IMessageShardDistributionQueue, MessageShardDistributionQueue>();
         builder.Services.AddScoped<IMessageIdentityService, MessageIdentityService>();
         builder.Services.AddScoped<IPeerSyncService, PeerSyncService>();
         builder.Services.AddScoped<IMessageErasureCodingService, MessageErasureCodingService>();
         builder.Services.AddHostedService<PeerPollingBackgroundService>();
         builder.Services.AddHostedService<MessageIntegrityBackgroundService>();
+        builder.Services.AddHostedService<MessageShardDistributionBackgroundService>();
 
         builder.Services.AddControllers();
         builder.Services.AddOpenApi();

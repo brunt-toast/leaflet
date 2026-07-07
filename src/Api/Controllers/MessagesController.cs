@@ -18,17 +18,20 @@ public sealed class MessagesController : ControllerBase
 {
     private readonly AppDbContext _appContext;
     private readonly IMessageErasureCodingService _messageErasureCodingService;
+    private readonly IMessageShardDistributionQueue _messageShardDistributionQueue;
     private readonly IMessageIdentityService _messageIdentityService;
     private readonly IOptions<MessageRequestOptions> _messageRequestOptions;
 
     public MessagesController(
         AppDbContext appContext,
         IMessageErasureCodingService messageErasureCodingService,
+        IMessageShardDistributionQueue messageShardDistributionQueue,
         IMessageIdentityService messageIdentityService,
         IOptions<MessageRequestOptions> messageRequestOptions)
     {
         _appContext = appContext;
         _messageErasureCodingService = messageErasureCodingService;
+        _messageShardDistributionQueue = messageShardDistributionQueue;
         _messageIdentityService = messageIdentityService;
         _messageRequestOptions = messageRequestOptions;
     }
@@ -126,8 +129,8 @@ public sealed class MessagesController : ControllerBase
 
         await _appContext.EncryptedMessages.AddRangeAsync(entities, cancellationToken);
         await _appContext.SaveChangesAsync(cancellationToken);
-        await _messageErasureCodingService.DistributeMessageShardsAsync(
-            entities.Select(entity => new EncryptedMessageDto
+
+        EncryptedMessageDto[] createdMessages = entities.Select(entity => new EncryptedMessageDto
             {
                 Id = entity.Id,
                 RoomHash = entity.RoomHash,
@@ -135,8 +138,9 @@ public sealed class MessagesController : ControllerBase
                 Nonce = entity.Nonce,
                 CypherText = entity.CypherText,
                 Signature = entity.Signature,
-            }),
-            cancellationToken);
+            })
+            .ToArray();
+        await _messageShardDistributionQueue.QueueAsync(createdMessages, cancellationToken);
 
         return Ok(new CreateMessagesResponse());
     }

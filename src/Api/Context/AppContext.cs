@@ -49,7 +49,7 @@ public class AppContext : DbContext
             .ValueGeneratedNever();
 
         modelBuilder.Entity<EncryptedMessageEntity>()
-            .HasIndex(message => new { message.RoomHash, message.Id });
+            .HasKey(message => new { message.RoomHash, message.Id });
 
         modelBuilder.Entity<InstanceStateEntity>()
             .HasKey(state => state.Id);

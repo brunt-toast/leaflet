@@ -46,6 +46,8 @@ internal sealed class ApiNode : IAsyncDisposable
         startInfo.Environment["PeerSync__PollIntervalSeconds"] = "0";
         startInfo.Environment["ErasureCoding__DataShards"] = "3";
         startInfo.Environment["ErasureCoding__ParityShards"] = "2";
+        startInfo.Environment["RateLimiting__PermitLimit"] = "1000000";
+        startInfo.Environment["RateLimiting__WindowSeconds"] = "1";
 
         _process = new Process
         {

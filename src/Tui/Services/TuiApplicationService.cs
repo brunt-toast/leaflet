@@ -1,5 +1,6 @@
 using System.Text;
 using Core.Dto;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -12,10 +13,12 @@ internal sealed class TuiApplicationService(
     MessagingApiClientService apiClient,
     ServerDiscoveryService serverDiscoveryService,
     IChatCryptoService cryptoService,
-    IAnsiConsole console)
+    IAnsiConsole console,
+    ILogger<TuiApplicationService> logger)
 {
     private readonly TuiAppConfig _config = configOptions.Value;
     private static readonly TimeSpan s_inputPollInterval = TimeSpan.FromMilliseconds(40);
+    private readonly ILogger _logger = logger;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -25,6 +28,7 @@ internal sealed class TuiApplicationService(
 
         if (initiallySelectedRoom?.Room is null)
         {
+            _logger.LogWarning("No rooms were configured in the client configuration.");
             console.MarkupLine("[red]No rooms were configured under [[rooms]].[/]");
             return;
         }
@@ -100,14 +104,17 @@ internal sealed class TuiApplicationService(
             return _config.Servers.Main;
         }
 
+        _logger.LogWarning("Primary server {ServerUrl} is unavailable. Checking backups.", _config.Servers.Main.Url);
         foreach (ServerConfig backup in _config.Servers.Backups)
         {
             if (await serverDiscoveryService.IsDiscoverableAsync(backup, cancellationToken))
             {
+                _logger.LogInformation("Selected backup server {ServerUrl}.", backup.Url);
                 return backup;
             }
         }
 
+        _logger.LogWarning("No discoverable backup servers were found. Falling back to primary server {ServerUrl}.", _config.Servers.Main.Url);
         return _config.Servers.Main;
     }
 
@@ -198,10 +205,16 @@ internal sealed class TuiApplicationService(
                 .Select(message => cryptoService.TryReadMessage(room, message))
                 .ToArray();
 
+            _logger.LogInformation(
+                "Refreshed room {RoomPath} from server {ServerUrl} with {MessageCount} messages.",
+                room.Path,
+                server.Url,
+                renderedMessages.Count);
             return new RoomViewState(room, renderedMessages, null, $"Synced {renderedMessages.Count} message(s).");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _logger.LogError(ex, "Refreshing room {RoomPath} from server {ServerUrl} failed.", room.Path, server.Url);
             return currentState with
             {
                 Error = ex.Message,
@@ -236,6 +249,7 @@ internal sealed class TuiApplicationService(
             server = await ResolveServerAsync(cancellationToken);
             EncryptedMessageDto dto = cryptoService.CreateEncryptedMessage(room, identity, text);
             await apiClient.SendMessageAsync(server, dto, cancellationToken);
+            _logger.LogInformation("Sent message for room {RoomPath} via server {ServerUrl}.", room.Path, server.Url);
             composeBuffer.Clear();
             return currentState with
             {
@@ -245,6 +259,7 @@ internal sealed class TuiApplicationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _logger.LogError(ex, "Sending message for room {RoomPath} via server {ServerUrl} failed.", room.Path, server.Url);
             return currentState with
             {
                 Error = ex.Message,

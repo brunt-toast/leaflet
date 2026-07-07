@@ -3,6 +3,7 @@ namespace Tui.Configuration;
 internal sealed class TuiAppConfig
 {
     public TuiCoreConfig Core { get; set; } = new();
+    public TuiLoggingConfig Logging { get; set; } = new();
     public IReadOnlyDictionary<string, IdentityConfig> Identities { get; set; } = new Dictionary<string, IdentityConfig>();
     public ServerClusterConfig Servers { get; set; } = new();
     public RoomGroupNode RoomsRoot { get; set; } = new()
@@ -17,6 +18,13 @@ internal sealed class TuiCoreConfig
 {
     public int HistoryCount { get; init; } = 50;
     public int RefreshIntervalSeconds { get; init; } = 10;
+}
+
+internal sealed class TuiLoggingConfig
+{
+    public string FilePath { get; init; } = "logs/tui-.log";
+    public string MinimumLevel { get; init; } = "Information";
+    public string MicrosoftMinimumLevel { get; init; } = "Warning";
 }
 
 internal sealed class IdentityConfig

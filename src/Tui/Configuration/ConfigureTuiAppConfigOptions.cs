@@ -12,6 +12,12 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
             HistoryCount = configuration.GetValue("core:history_count", 50),
             RefreshIntervalSeconds = Math.Max(1, configuration.GetValue("core:refresh_interval_seconds", 10))
         };
+        options.Logging = new TuiLoggingConfig
+        {
+            FilePath = configuration.GetValue("logging:file_path", "logs/tui-.log") ?? "logs/tui-.log",
+            MinimumLevel = configuration.GetValue("logging:minimum_level", "Information") ?? "Information",
+            MicrosoftMinimumLevel = configuration.GetValue("logging:microsoft_minimum_level", "Warning") ?? "Warning"
+        };
 
         options.Identities = BuildIdentities();
         options.Servers = BuildServers();

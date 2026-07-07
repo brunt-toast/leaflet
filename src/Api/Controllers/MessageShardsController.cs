@@ -8,8 +8,15 @@ namespace Api.Controllers;
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
 [Route("api/internal/message-shards")]
-public sealed class MessageShardsController(IMessageErasureCodingService messageErasureCodingService) : ControllerBase
+public sealed class MessageShardsController : ControllerBase
 {
+    private readonly IMessageErasureCodingService _messageErasureCodingService;
+
+    public MessageShardsController(IMessageErasureCodingService messageErasureCodingService)
+    {
+        _messageErasureCodingService = messageErasureCodingService;
+    }
+
     [HttpGet]
     public async Task<ActionResult<GetMessageShardsResponse>> GetMessageShardsAsync(
         [FromQuery] string roomHash,
@@ -17,7 +24,7 @@ public sealed class MessageShardsController(IMessageErasureCodingService message
         [FromQuery] int numberToFetch,
         CancellationToken cancellationToken)
     {
-        return Ok(await messageErasureCodingService.GetStoredMessageShardsAsync(
+        return Ok(await _messageErasureCodingService.GetStoredMessageShardsAsync(
             roomHash,
             maxId,
             numberToFetch,
@@ -29,7 +36,7 @@ public sealed class MessageShardsController(IMessageErasureCodingService message
         [FromBody] StoreMessageShardsRequest request,
         CancellationToken cancellationToken)
     {
-        await messageErasureCodingService.StoreMessageShardsAsync(request, cancellationToken);
+        await _messageErasureCodingService.StoreMessageShardsAsync(request, cancellationToken);
         return Ok();
     }
 }

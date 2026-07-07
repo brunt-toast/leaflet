@@ -6,8 +6,15 @@ namespace Api.Controllers;
 
 [ApiController]
 [Route("api/servers")]
-public sealed class ServersController(IPeerSyncService peerSyncService) : ControllerBase
+public sealed class ServersController : ControllerBase
 {
+    private readonly IPeerSyncService _peerSyncService;
+
+    public ServersController(IPeerSyncService peerSyncService)
+    {
+        _peerSyncService = peerSyncService;
+    }
+
     [HttpGet]
     [ProducesResponseType<GetKnownServersResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<GetKnownServersResponse>> GetKnownServersAsync(
@@ -17,12 +24,12 @@ public sealed class ServersController(IPeerSyncService peerSyncService) : Contro
     {
         if (!suppressCallback && !string.IsNullOrWhiteSpace(requesterUrl))
         {
-            await peerSyncService.PollRequesterAsync(requesterUrl, cancellationToken);
+            await _peerSyncService.PollRequesterAsync(requesterUrl, cancellationToken);
         }
 
         return Ok(new GetKnownServersResponse
         {
-            Servers = (await peerSyncService.GetOnlineServersAsync(cancellationToken)).ToArray(),
+            Servers = (await _peerSyncService.GetOnlineServersAsync(cancellationToken)).ToArray(),
         });
     }
 }

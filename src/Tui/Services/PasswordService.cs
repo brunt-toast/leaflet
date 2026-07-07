@@ -2,9 +2,15 @@ using Spectre.Console;
 
 namespace Tui.Services;
 
-internal sealed class PasswordService(IAnsiConsole console)
+internal sealed class PasswordService
 {
     private static readonly Dictionary<string, string> s_cache = [];
+    private readonly IAnsiConsole _console;
+
+    public PasswordService(IAnsiConsole console)
+    {
+        _console = console;
+    }
 
     public string GetPassword(string prompt = "Password: ", string cacheKey = "default")
     {
@@ -13,7 +19,7 @@ internal sealed class PasswordService(IAnsiConsole console)
             return ret;
         }
 
-        ret = console.Prompt(
+        ret = _console.Prompt(
             new TextPrompt<string>(prompt)
                 .PromptStyle("green")
                 .Secret()

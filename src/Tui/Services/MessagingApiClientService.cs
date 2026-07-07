@@ -8,11 +8,18 @@ using Tui.Configuration;
 
 namespace Tui.Services;
 
-internal sealed class MessagingApiClientService(
-    HttpClient httpClient,
-    ILogger<MessagingApiClientService> logger)
+internal sealed class MessagingApiClientService
 {
-    private readonly ILogger _logger = logger;
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<MessagingApiClientService> _logger;
+
+    public MessagingApiClientService(
+        HttpClient httpClient,
+        ILogger<MessagingApiClientService> logger)
+    {
+        _httpClient = httpClient;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyList<EncryptedMessageDto>> GetMessagesAsync(
         ServerConfig server,
@@ -23,7 +30,7 @@ internal sealed class MessagingApiClientService(
         string requestUri =
             $"{server.Url.TrimEnd('/')}/api/messages?roomHash={Uri.EscapeDataString(roomHash)}&maxId={long.MaxValue}&numberToFetch={numberToFetch}";
 
-        using HttpResponseMessage response = await httpClient.GetAsync(requestUri, cancellationToken);
+        using HttpResponseMessage response = await _httpClient.GetAsync(requestUri, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         string responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -48,7 +55,7 @@ internal sealed class MessagingApiClientService(
         string requestBody = JsonConvert.SerializeObject(request);
         using StringContent content = new(requestBody, Encoding.UTF8, "application/json");
         _logger.LogInformation("Sending message for room {RoomHash} to {ServerUrl}.", message.RoomHash, server.Url);
-        using HttpResponseMessage response = await httpClient.PostAsync(requestUri, content, cancellationToken);
+        using HttpResponseMessage response = await _httpClient.PostAsync(requestUri, content, cancellationToken);
         response.EnsureSuccessStatusCode();
         _logger.LogInformation("Sent message for room {RoomHash} to {ServerUrl}.", message.RoomHash, server.Url);
     }

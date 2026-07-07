@@ -6,18 +6,27 @@ using Serilog.Events;
 
 namespace Tui.Configuration;
 
-internal sealed class TuiLoggingLevelSwitchUpdater(
-    IOptionsMonitor<TuiLoggingConfig> loggingConfigMonitor,
-    TuiLoggingLevelSwitches levelSwitches,
-    ILogger<TuiLoggingLevelSwitchUpdater> logger) : IHostedService, IDisposable
+internal sealed class TuiLoggingLevelSwitchUpdater : IHostedService, IDisposable
 {
-    private readonly ILogger _logger = logger;
+    private readonly IOptionsMonitor<TuiLoggingConfig> _loggingConfigMonitor;
+    private readonly TuiLoggingLevelSwitches _levelSwitches;
+    private readonly ILogger _logger;
     private IDisposable? _changeSubscription;
+
+    public TuiLoggingLevelSwitchUpdater(
+        IOptionsMonitor<TuiLoggingConfig> loggingConfigMonitor,
+        TuiLoggingLevelSwitches levelSwitches,
+        ILogger<TuiLoggingLevelSwitchUpdater> logger)
+    {
+        _loggingConfigMonitor = loggingConfigMonitor;
+        _levelSwitches = levelSwitches;
+        _logger = logger;
+    }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        Apply(loggingConfigMonitor.CurrentValue);
-        _changeSubscription = loggingConfigMonitor.OnChange(Apply);
+        Apply(_loggingConfigMonitor.CurrentValue);
+        _changeSubscription = _loggingConfigMonitor.OnChange(Apply);
         return Task.CompletedTask;
     }
 
@@ -45,8 +54,8 @@ internal sealed class TuiLoggingLevelSwitchUpdater(
             return;
         }
 
-        levelSwitches.Application.MinimumLevel = minimumLevel;
-        levelSwitches.Microsoft.MinimumLevel = microsoftMinimumLevel;
+        _levelSwitches.Application.MinimumLevel = minimumLevel;
+        _levelSwitches.Microsoft.MinimumLevel = microsoftMinimumLevel;
     }
 
     private static bool TryParseLevel(string value, out LogEventLevel level)
@@ -55,6 +64,15 @@ internal sealed class TuiLoggingLevelSwitchUpdater(
     }
 }
 
-internal sealed record TuiLoggingLevelSwitches(
-    LoggingLevelSwitch Application,
-    LoggingLevelSwitch Microsoft);
+internal sealed record TuiLoggingLevelSwitches
+{
+    public TuiLoggingLevelSwitches(LoggingLevelSwitch application, LoggingLevelSwitch microsoft)
+    {
+        Application = application;
+        Microsoft = microsoft;
+    }
+
+    public LoggingLevelSwitch Application { get; init; }
+
+    public LoggingLevelSwitch Microsoft { get; init; }
+}

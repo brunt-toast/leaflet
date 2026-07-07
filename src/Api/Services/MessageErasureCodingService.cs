@@ -12,21 +12,35 @@ using Witteborn.ReedSolomon;
 
 namespace Api.Services;
 
-internal sealed class MessageErasureCodingService(
-    AppDbContext appContext,
-    IHttpClientFactory httpClientFactory,
-    IMessageIdentityService messageIdentityService,
-    IOptions<PeerSyncOptions> peerSyncOptions,
-    IOptions<ErasureCodingOptions> erasureCodingOptions,
-    ILogger<MessageErasureCodingService> logger) : IMessageErasureCodingService
+internal sealed class MessageErasureCodingService : IMessageErasureCodingService
 {
     private const string MessageShardsEndpointPath = "/api/internal/message-shards";
-    private readonly PeerSyncOptions _peerSyncOptions = peerSyncOptions.Value;
-    private readonly ErasureCodingOptions _erasureCodingOptions = erasureCodingOptions.Value;
+    private readonly AppDbContext _appContext;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IMessageIdentityService _messageIdentityService;
+    private readonly PeerSyncOptions _peerSyncOptions;
+    private readonly ErasureCodingOptions _erasureCodingOptions;
+    private readonly ILogger<MessageErasureCodingService> _logger;
+
+    public MessageErasureCodingService(
+        AppDbContext appContext,
+        IHttpClientFactory httpClientFactory,
+        IMessageIdentityService messageIdentityService,
+        IOptions<PeerSyncOptions> peerSyncOptions,
+        IOptions<ErasureCodingOptions> erasureCodingOptions,
+        ILogger<MessageErasureCodingService> logger)
+    {
+        _appContext = appContext;
+        _httpClientFactory = httpClientFactory;
+        _messageIdentityService = messageIdentityService;
+        _peerSyncOptions = peerSyncOptions.Value;
+        _erasureCodingOptions = erasureCodingOptions.Value;
+        _logger = logger;
+    }
 
     public async Task EnsureMessagesAvailableAsync(string roomHash, long maxId, int numberToFetch, CancellationToken cancellationToken)
     {
-        int localCount = await appContext.EncryptedMessages
+        int localCount = await _appContext.EncryptedMessages
             .Where(message => message.RoomHash == roomHash && message.Id <= maxId)
             .CountAsync(cancellationToken);
 
@@ -46,7 +60,7 @@ internal sealed class MessageErasureCodingService(
             return;
         }
 
-        HashSet<long> existingMessageIds = await appContext.EncryptedMessages
+        HashSet<long> existingMessageIds = await _appContext.EncryptedMessages
             .Where(message => message.RoomHash == roomHash && message.Id <= maxId)
             .Select(message => message.Id)
             .ToHashSetAsync(cancellationToken);
@@ -92,11 +106,11 @@ internal sealed class MessageErasureCodingService(
             return;
         }
 
-        await messageIdentityService.ObserveMessageIdsAsync(
+        await _messageIdentityService.ObserveMessageIdsAsync(
             recoveredMessages.Select(message => (message.RoomHash, message.Id)),
             cancellationToken);
-        await appContext.EncryptedMessages.AddRangeAsync(recoveredMessages, cancellationToken);
-        await appContext.SaveChangesAsync(cancellationToken);
+        await _appContext.EncryptedMessages.AddRangeAsync(recoveredMessages, cancellationToken);
+        await _appContext.SaveChangesAsync(cancellationToken);
     }
 
     public async Task DistributeMessageShardsAsync(IEnumerable<EncryptedMessageDto> messages, CancellationToken cancellationToken)
@@ -112,7 +126,7 @@ internal sealed class MessageErasureCodingService(
         List<KnownServerEntity> candidatePeers = await GetShardPlacementPeersAsync(cancellationToken);
         if (candidatePeers.Count == 0)
         {
-            logger.LogWarning("Skipping erasure coding distribution because no active peers are available.");
+            _logger.LogWarning("Skipping erasure coding distribution because no active peers are available.");
             return;
         }
 
@@ -218,7 +232,7 @@ internal sealed class MessageErasureCodingService(
             return;
         }
 
-        logger.LogInformation(
+        _logger.LogInformation(
             "Repairing shard redundancy for {MessageCount} messages.",
             messagesNeedingRepair.Count);
 
@@ -232,7 +246,7 @@ internal sealed class MessageErasureCodingService(
             return;
         }
 
-        await messageIdentityService.ObserveMessageIdsAsync(
+        await _messageIdentityService.ObserveMessageIdsAsync(
             request.MessageShards.Select(shard => (shard.RoomHash, shard.MessageId)),
             cancellationToken);
 
@@ -242,7 +256,7 @@ internal sealed class MessageErasureCodingService(
             .Distinct()
             .ToArray();
 
-        MessageShardEntity[] existingShards = await appContext.MessageShards
+        MessageShardEntity[] existingShards = await _appContext.MessageShards
             .Where(shard => shard.RoomHash == roomHash && messageIds.Contains(shard.MessageId))
             .ToArrayAsync(cancellationToken);
 
@@ -267,7 +281,7 @@ internal sealed class MessageErasureCodingService(
                     StoredAtUtc = DateTime.UtcNow,
                 };
 
-                await appContext.MessageShards.AddAsync(entity, cancellationToken);
+                await _appContext.MessageShards.AddAsync(entity, cancellationToken);
                 continue;
             }
 
@@ -278,7 +292,7 @@ internal sealed class MessageErasureCodingService(
             entity.StoredAtUtc = DateTime.UtcNow;
         }
 
-        await appContext.SaveChangesAsync(cancellationToken);
+        await _appContext.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<GetMessageShardsResponse> GetStoredMessageShardsAsync(
@@ -289,7 +303,7 @@ internal sealed class MessageErasureCodingService(
     {
         int totalShardCount = _erasureCodingOptions.DataShards + _erasureCodingOptions.ParityShards;
 
-        long[] messageIds = await appContext.MessageShards
+        long[] messageIds = await _appContext.MessageShards
             .Where(shard => shard.RoomHash == roomHash && shard.MessageId <= maxId)
             .Select(shard => shard.MessageId)
             .Distinct()
@@ -297,7 +311,7 @@ internal sealed class MessageErasureCodingService(
             .Take(numberToFetch)
             .ToArrayAsync(cancellationToken);
 
-        MessageShardDto[] shards = await appContext.MessageShards
+        MessageShardDto[] shards = await _appContext.MessageShards
             .Where(shard => shard.RoomHash == roomHash && messageIds.Contains(shard.MessageId))
             .OrderByDescending(shard => shard.MessageId)
             .ThenBy(shard => shard.ShardIndex)
@@ -323,7 +337,7 @@ internal sealed class MessageErasureCodingService(
     private async Task<MessageShardDto[]> FetchRemoteShardsAsync(string roomHash, long maxId, int numberToFetch, CancellationToken cancellationToken)
     {
         string? publicUrl = TryNormalizeUrl(_peerSyncOptions.PublicUrl);
-        string[] peerUrls = await appContext.KnownServers
+        string[] peerUrls = await _appContext.KnownServers
             .Where(peer => peer.IsActive && peer.Url != publicUrl)
             .OrderBy(peer => peer.Url)
             .Select(peer => peer.Url)
@@ -337,7 +351,7 @@ internal sealed class MessageErasureCodingService(
 
             try
             {
-                HttpClient client = httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
+                HttpClient client = _httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
                 string requestUri =
                     $"{peerUrl}{MessageShardsEndpointPath}?roomHash={Uri.EscapeDataString(roomHash)}&maxId={maxId}&numberToFetch={numberToFetch}";
 
@@ -349,7 +363,7 @@ internal sealed class MessageErasureCodingService(
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
             {
-                logger.LogWarning(ex, "Failed to fetch message shards from peer '{PeerUrl}'.", peerUrl);
+                _logger.LogWarning(ex, "Failed to fetch message shards from peer '{PeerUrl}'.", peerUrl);
             }
         }
 
@@ -381,7 +395,7 @@ internal sealed class MessageErasureCodingService(
         long messageId,
         CancellationToken cancellationToken)
     {
-        return await appContext.MessageShards
+        return await _appContext.MessageShards
             .Where(shard => shard.RoomHash == roomHash && shard.MessageId == messageId)
             .OrderBy(shard => shard.ShardIndex)
             .Select(shard => new MessageShardDto
@@ -399,7 +413,7 @@ internal sealed class MessageErasureCodingService(
 
     private async Task<EncryptedMessageDto?> GetLocalMessageAsync(string roomHash, long messageId, CancellationToken cancellationToken)
     {
-        return await appContext.EncryptedMessages
+        return await _appContext.EncryptedMessages
             .Where(message => message.RoomHash == roomHash && message.Id == messageId)
             .Select(message => new EncryptedMessageDto
             {
@@ -417,7 +431,7 @@ internal sealed class MessageErasureCodingService(
     {
         try
         {
-            HttpClient client = httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
+            HttpClient client = _httpClientFactory.CreateClient(nameof(MessageErasureCodingService));
             using HttpResponseMessage response = await client.PostAsJsonAsync(
                 $"{peerUrl}{MessageShardsEndpointPath}",
                 new StoreMessageShardsRequest
@@ -428,25 +442,25 @@ internal sealed class MessageErasureCodingService(
 
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("Failed to store message shards on peer '{PeerUrl}'. Status code: {StatusCode}.", peerUrl, response.StatusCode);
+                _logger.LogWarning("Failed to store message shards on peer '{PeerUrl}'. Status code: {StatusCode}.", peerUrl, response.StatusCode);
             }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            logger.LogWarning(ex, "Failed to store message shards on peer '{PeerUrl}'.", peerUrl);
+            _logger.LogWarning(ex, "Failed to store message shards on peer '{PeerUrl}'.", peerUrl);
         }
     }
 
     private async Task<MessageCandidate[]> GetRepairCandidatesAsync(int batchSize, CancellationToken cancellationToken)
     {
-        MessageCandidate[] messageCandidates = await appContext.EncryptedMessages
+        MessageCandidate[] messageCandidates = await _appContext.EncryptedMessages
             .AsNoTracking()
             .OrderByDescending(message => message.Id)
             .Take(batchSize)
             .Select(message => new MessageCandidate(message.RoomHash, message.Id))
             .ToArrayAsync(cancellationToken);
 
-        MessageCandidate[] shardCandidates = await appContext.MessageShards
+        MessageCandidate[] shardCandidates = await _appContext.MessageShards
             .AsNoTracking()
             .GroupBy(shard => new { shard.RoomHash, shard.MessageId })
             .Select(group => new
@@ -471,7 +485,7 @@ internal sealed class MessageErasureCodingService(
     {
         string? publicUrl = TryNormalizeUrl(_peerSyncOptions.PublicUrl);
 
-        return await appContext.KnownServers
+        return await _appContext.KnownServers
             .Where(peer => peer.IsActive && peer.Url != publicUrl)
             .OrderBy(peer => peer.FirstSeenAtUtc)
             .ToListAsync(cancellationToken);
@@ -550,15 +564,15 @@ internal sealed class MessageErasureCodingService(
 
     private async Task StoreRecoveredMessageAsync(EncryptedMessageDto message, CancellationToken cancellationToken)
     {
-        bool exists = await appContext.EncryptedMessages
+        bool exists = await _appContext.EncryptedMessages
             .AnyAsync(existing => existing.RoomHash == message.RoomHash && existing.Id == message.Id, cancellationToken);
         if (exists)
         {
             return;
         }
 
-        await messageIdentityService.ObserveMessageIdAsync(message.RoomHash, message.Id, cancellationToken);
-        await appContext.EncryptedMessages.AddAsync(new EncryptedMessageEntity
+        await _messageIdentityService.ObserveMessageIdAsync(message.RoomHash, message.Id, cancellationToken);
+        await _appContext.EncryptedMessages.AddAsync(new EncryptedMessageEntity
         {
             Id = message.Id,
             RoomHash = message.RoomHash,
@@ -567,7 +581,7 @@ internal sealed class MessageErasureCodingService(
             CypherText = message.CypherText,
             Signature = message.Signature,
         }, cancellationToken);
-        await appContext.SaveChangesAsync(cancellationToken);
+        await _appContext.SaveChangesAsync(cancellationToken);
     }
 
     private static string? TryNormalizeUrl(string? url)
@@ -581,4 +595,15 @@ internal sealed class MessageErasureCodingService(
     }
 }
 
-internal sealed record MessageCandidate(string RoomHash, long MessageId);
+internal sealed record MessageCandidate
+{
+    public MessageCandidate(string roomHash, long messageId)
+    {
+        RoomHash = roomHash;
+        MessageId = messageId;
+    }
+
+    public string RoomHash { get; init; }
+
+    public long MessageId { get; init; }
+}

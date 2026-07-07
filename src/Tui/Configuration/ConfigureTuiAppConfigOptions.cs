@@ -3,20 +3,27 @@ using Microsoft.Extensions.Options;
 
 namespace Tui.Configuration;
 
-internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration) : IConfigureOptions<TuiAppConfig>
+internal sealed class ConfigureTuiAppConfigOptions : IConfigureOptions<TuiAppConfig>
 {
+    private readonly IConfiguration _configuration;
+
+    public ConfigureTuiAppConfigOptions(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
     public void Configure(TuiAppConfig options)
     {
         options.Core = new TuiCoreConfig
         {
-            HistoryCount = configuration.GetValue("core:history_count", 50),
-            RefreshIntervalSeconds = Math.Max(1, configuration.GetValue("core:refresh_interval_seconds", 10))
+            HistoryCount = _configuration.GetValue("core:history_count", 50),
+            RefreshIntervalSeconds = Math.Max(1, _configuration.GetValue("core:refresh_interval_seconds", 10))
         };
         options.Logging = new TuiLoggingConfig
         {
-            FilePath = configuration.GetValue("logging:file_path", "logs/tui-.log") ?? "logs/tui-.log",
-            MinimumLevel = configuration.GetValue("logging:minimum_level", "Information") ?? "Information",
-            MicrosoftMinimumLevel = configuration.GetValue("logging:microsoft_minimum_level", "Warning") ?? "Warning"
+            FilePath = _configuration.GetValue("logging:file_path", "logs/tui-.log") ?? "logs/tui-.log",
+            MinimumLevel = _configuration.GetValue("logging:minimum_level", "Information") ?? "Information",
+            MicrosoftMinimumLevel = _configuration.GetValue("logging:microsoft_minimum_level", "Warning") ?? "Warning"
         };
 
         options.Identities = BuildIdentities();
@@ -26,7 +33,7 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
 
     private IReadOnlyDictionary<string, IdentityConfig> BuildIdentities()
     {
-        IConfigurationSection identitiesSection = configuration.GetSection("identities");
+        IConfigurationSection identitiesSection = _configuration.GetSection("identities");
         if (!identitiesSection.Exists())
         {
             throw new InvalidOperationException("config.toml must contain an [identities] section.");
@@ -53,7 +60,7 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
 
     private ServerClusterConfig BuildServers()
     {
-        IConfigurationSection serversSection = configuration.GetSection("servers");
+        IConfigurationSection serversSection = _configuration.GetSection("servers");
         if (!serversSection.Exists())
         {
             throw new InvalidOperationException("config.toml must contain a [servers] section.");
@@ -95,7 +102,7 @@ internal sealed class ConfigureTuiAppConfigOptions(IConfiguration configuration)
 
     private RoomGroupNode BuildRooms()
     {
-        IConfigurationSection roomsSection = configuration.GetSection("rooms");
+        IConfigurationSection roomsSection = _configuration.GetSection("rooms");
         if (!roomsSection.Exists())
         {
             throw new InvalidOperationException("config.toml must contain a [rooms] section.");

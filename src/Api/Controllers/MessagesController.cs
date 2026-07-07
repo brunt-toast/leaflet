@@ -14,25 +14,38 @@ namespace Api.Controllers;
 
 [ApiController]
 [Route("api/messages")]
-public sealed class MessagesController(
-    AppDbContext appContext,
-    IMessageErasureCodingService messageErasureCodingService,
-    IMessageIdentityService messageIdentityService,
-    IOptions<MessageRequestOptions> messageRequestOptions) : ControllerBase
+public sealed class MessagesController : ControllerBase
 {
+    private readonly AppDbContext _appContext;
+    private readonly IMessageErasureCodingService _messageErasureCodingService;
+    private readonly IMessageIdentityService _messageIdentityService;
+    private readonly IOptions<MessageRequestOptions> _messageRequestOptions;
+
+    public MessagesController(
+        AppDbContext appContext,
+        IMessageErasureCodingService messageErasureCodingService,
+        IMessageIdentityService messageIdentityService,
+        IOptions<MessageRequestOptions> messageRequestOptions)
+    {
+        _appContext = appContext;
+        _messageErasureCodingService = messageErasureCodingService;
+        _messageIdentityService = messageIdentityService;
+        _messageRequestOptions = messageRequestOptions;
+    }
+
     [HttpGet]
     [ProducesResponseType<GetMessagesResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<GetMessagesResponse>> GetMessagesAsync(
         [FromQuery] GetMessagesRequest request,
         CancellationToken cancellationToken)
     {
-        await messageErasureCodingService.EnsureMessagesAvailableAsync(
+        await _messageErasureCodingService.EnsureMessagesAvailableAsync(
             request.RoomHash,
             request.MaxId,
             request.NumberToFetch,
             cancellationToken);
 
-        EncryptedMessageDto[] messages = await appContext.EncryptedMessages
+        EncryptedMessageDto[] messages = await _appContext.EncryptedMessages
             .Where(message => message.RoomHash == request.RoomHash && message.Id <= request.MaxId)
             .OrderByDescending(message => message.Id)
             .Take(request.NumberToFetch)
@@ -62,7 +75,7 @@ public sealed class MessagesController(
         [FromBody] CreateMessagesRequest request,
         CancellationToken cancellationToken)
     {
-        MessageRequestOptions options = messageRequestOptions.Value;
+        MessageRequestOptions options = _messageRequestOptions.Value;
         int maxMessagesPerRequest = options.MaxMessagesPerRequest;
         if (maxMessagesPerRequest > 0 && request.Messages.Length > maxMessagesPerRequest)
         {
@@ -108,12 +121,12 @@ public sealed class MessagesController(
 
         foreach (EncryptedMessageEntity entity in entities)
         {
-            entity.Id = await messageIdentityService.CreateMessageIdAsync(entity.RoomHash, cancellationToken);
+            entity.Id = await _messageIdentityService.CreateMessageIdAsync(entity.RoomHash, cancellationToken);
         }
 
-        await appContext.EncryptedMessages.AddRangeAsync(entities, cancellationToken);
-        await appContext.SaveChangesAsync(cancellationToken);
-        await messageErasureCodingService.DistributeMessageShardsAsync(
+        await _appContext.EncryptedMessages.AddRangeAsync(entities, cancellationToken);
+        await _appContext.SaveChangesAsync(cancellationToken);
+        await _messageErasureCodingService.DistributeMessageShardsAsync(
             entities.Select(entity => new EncryptedMessageDto
             {
                 Id = entity.Id,

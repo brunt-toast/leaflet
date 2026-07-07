@@ -5,13 +5,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Api.Services;
 
-internal sealed class MessageIdentityService(AppDbContext appContext) : IMessageIdentityService
+internal sealed class MessageIdentityService : IMessageIdentityService
 {
     private const int SingletonInstanceStateId = 1;
     private const int InstanceDiscriminatorBits = 32;
     private const long InstanceDiscriminatorMask = (1L << InstanceDiscriminatorBits) - 1L;
     private const long MaxLogicalTime = long.MaxValue >> InstanceDiscriminatorBits;
     private static readonly SemaphoreSlim Gate = new(initialCount: 1, maxCount: 1);
+    private readonly AppDbContext _appContext;
+
+    public MessageIdentityService(AppDbContext appContext)
+    {
+        _appContext = appContext;
+    }
 
     public async Task<long> CreateMessageIdAsync(string roomHash, CancellationToken cancellationToken)
     {
@@ -28,7 +34,7 @@ internal sealed class MessageIdentityService(AppDbContext appContext) : IMessage
             }
 
             roomClock.LastLogicalTime++;
-            await appContext.SaveChangesAsync(cancellationToken);
+            await _appContext.SaveChangesAsync(cancellationToken);
 
             return ComposeMessageId(roomClock.LastLogicalTime, instanceDiscriminator);
         }
@@ -66,7 +72,7 @@ internal sealed class MessageIdentityService(AppDbContext appContext) : IMessage
                 }
             }
 
-            await appContext.SaveChangesAsync(cancellationToken);
+            await _appContext.SaveChangesAsync(cancellationToken);
         }
         finally
         {
@@ -76,7 +82,7 @@ internal sealed class MessageIdentityService(AppDbContext appContext) : IMessage
 
     private async Task<uint> GetOrCreateInstanceDiscriminatorAsync(CancellationToken cancellationToken)
     {
-        InstanceStateEntity? instanceState = await appContext.InstanceStates
+        InstanceStateEntity? instanceState = await _appContext.InstanceStates
             .SingleOrDefaultAsync(state => state.Id == SingletonInstanceStateId, cancellationToken);
 
         if (instanceState is not null)
@@ -95,14 +101,14 @@ internal sealed class MessageIdentityService(AppDbContext appContext) : IMessage
             instanceState.InstanceDiscriminator = 1;
         }
 
-        await appContext.InstanceStates.AddAsync(instanceState, cancellationToken);
-        await appContext.SaveChangesAsync(cancellationToken);
+        await _appContext.InstanceStates.AddAsync(instanceState, cancellationToken);
+        await _appContext.SaveChangesAsync(cancellationToken);
         return instanceState.InstanceDiscriminator;
     }
 
     private async Task<RoomClockEntity> GetOrCreateRoomClockAsync(string roomHash, CancellationToken cancellationToken)
     {
-        RoomClockEntity? roomClock = await appContext.RoomClocks
+        RoomClockEntity? roomClock = await _appContext.RoomClocks
             .SingleOrDefaultAsync(clock => clock.RoomHash == roomHash, cancellationToken);
 
         if (roomClock is not null)
@@ -116,7 +122,7 @@ internal sealed class MessageIdentityService(AppDbContext appContext) : IMessage
             LastLogicalTime = 0,
         };
 
-        await appContext.RoomClocks.AddAsync(roomClock, cancellationToken);
+        await _appContext.RoomClocks.AddAsync(roomClock, cancellationToken);
         return roomClock;
     }
 

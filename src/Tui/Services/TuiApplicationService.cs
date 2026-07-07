@@ -8,17 +8,31 @@ using Tui.Configuration;
 
 namespace Tui.Services;
 
-internal sealed class TuiApplicationService(
-    IOptions<TuiAppConfig> configOptions,
-    MessagingApiClientService apiClient,
-    ServerDiscoveryService serverDiscoveryService,
-    IChatCryptoService cryptoService,
-    IAnsiConsole console,
-    ILogger<TuiApplicationService> logger)
+internal sealed class TuiApplicationService
 {
-    private readonly TuiAppConfig _config = configOptions.Value;
     private static readonly TimeSpan s_inputPollInterval = TimeSpan.FromMilliseconds(40);
-    private readonly ILogger _logger = logger;
+    private readonly TuiAppConfig _config;
+    private readonly MessagingApiClientService _apiClient;
+    private readonly ServerDiscoveryService _serverDiscoveryService;
+    private readonly IChatCryptoService _cryptoService;
+    private readonly IAnsiConsole _console;
+    private readonly ILogger<TuiApplicationService> _logger;
+
+    public TuiApplicationService(
+        IOptions<TuiAppConfig> configOptions,
+        MessagingApiClientService apiClient,
+        ServerDiscoveryService serverDiscoveryService,
+        IChatCryptoService cryptoService,
+        IAnsiConsole console,
+        ILogger<TuiApplicationService> logger)
+    {
+        _config = configOptions.Value;
+        _apiClient = apiClient;
+        _serverDiscoveryService = serverDiscoveryService;
+        _cryptoService = cryptoService;
+        _console = console;
+        _logger = logger;
+    }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -29,7 +43,7 @@ internal sealed class TuiApplicationService(
         if (initiallySelectedRoom?.Room is null)
         {
             _logger.LogWarning("No rooms were configured in the client configuration.");
-            console.MarkupLine("[red]No rooms were configured under [[rooms]].[/]");
+            _console.MarkupLine("[red]No rooms were configured under [[rooms]].[/]");
             return;
         }
 
@@ -40,7 +54,7 @@ internal sealed class TuiApplicationService(
         RoomViewState roomState = RoomViewState.Empty(selectedRoom);
         bool needsRender = true;
 
-        console.Cursor.Hide();
+        _console.Cursor.Hide();
 
         try
         {
@@ -92,14 +106,14 @@ internal sealed class TuiApplicationService(
         }
         finally
         {
-            console.Cursor.Show();
-            console.Clear();
+            _console.Cursor.Show();
+            _console.Clear();
         }
     }
 
     private async Task<ServerConfig> ResolveServerAsync(CancellationToken cancellationToken)
     {
-        if (await serverDiscoveryService.IsDiscoverableAsync(_config.Servers.Main, cancellationToken))
+        if (await _serverDiscoveryService.IsDiscoverableAsync(_config.Servers.Main, cancellationToken))
         {
             return _config.Servers.Main;
         }
@@ -107,7 +121,7 @@ internal sealed class TuiApplicationService(
         _logger.LogWarning("Primary server {ServerUrl} is unavailable. Checking backups.", _config.Servers.Main.Url);
         foreach (ServerConfig backup in _config.Servers.Backups)
         {
-            if (await serverDiscoveryService.IsDiscoverableAsync(backup, cancellationToken))
+            if (await _serverDiscoveryService.IsDiscoverableAsync(backup, cancellationToken))
             {
                 _logger.LogInformation("Selected backup server {ServerUrl}.", backup.Url);
                 return backup;
@@ -194,15 +208,15 @@ internal sealed class TuiApplicationService(
     {
         try
         {
-            string roomHash = cryptoService.ComputeRoomHash(room.Key);
-            IReadOnlyList<EncryptedMessageDto> messages = await apiClient.GetMessagesAsync(
+            string roomHash = _cryptoService.ComputeRoomHash(room.Key);
+            IReadOnlyList<EncryptedMessageDto> messages = await _apiClient.GetMessagesAsync(
                 server,
                 roomHash,
                 _config.Core.HistoryCount,
                 cancellationToken);
 
             IReadOnlyList<RenderedMessage> renderedMessages = messages
-                .Select(message => cryptoService.TryReadMessage(room, message))
+                .Select(message => _cryptoService.TryReadMessage(room, message))
                 .ToArray();
 
             _logger.LogInformation(
@@ -247,8 +261,8 @@ internal sealed class TuiApplicationService(
         try
         {
             server = await ResolveServerAsync(cancellationToken);
-            EncryptedMessageDto dto = cryptoService.CreateEncryptedMessage(room, identity, text);
-            await apiClient.SendMessageAsync(server, dto, cancellationToken);
+            EncryptedMessageDto dto = _cryptoService.CreateEncryptedMessage(room, identity, text);
+            await _apiClient.SendMessageAsync(server, dto, cancellationToken);
             _logger.LogInformation("Sent message for room {RoomPath} via server {ServerUrl}.", room.Path, server.Url);
             composeBuffer.Clear();
             return currentState with
@@ -295,30 +309,30 @@ internal sealed class TuiApplicationService(
         mainLayout["Messages"].Update(BuildMessagesPanel(roomState));
         mainLayout["Compose"].Update(BuildComposePanel(composeBuffer));
 
-        console.Clear();
-        console.Write(root);
+        _console.Clear();
+        _console.Write(root);
     }
 
     private Panel BuildRoomsPanel(IReadOnlyList<RoomListEntry> roomEntries, RoomLeafNode selectedRoom)
     {
         List<IRenderable> rows = [];
 
-        foreach ((string label, int depth, RoomLeafNode? roomLeafNode) in roomEntries)
+        foreach (RoomListEntry roomEntry in roomEntries)
         {
-            string indent = new(' ', depth * 2);
+            string indent = new(' ', roomEntry.Depth * 2);
 
-            if (roomLeafNode is null)
+            if (roomEntry.Room is null)
             {
-                rows.Add(new Text(indent + label, new Style(Color.Aqua)));
+                rows.Add(new Text(indent + roomEntry.Name, new Style(Color.Aqua)));
                 continue;
             }
 
-            bool isSelected = roomLeafNode.Path == selectedRoom.Path;
+            bool isSelected = roomEntry.Room.Path == selectedRoom.Path;
             string selectedPrefix = isSelected ? "> " : "  ";
             Style rowStyle = isSelected
                 ? new Style(Color.Black, Color.Yellow)
                 : Style.Plain;
-            rows.Add(new Text(selectedPrefix + indent + label, rowStyle));
+            rows.Add(new Text(selectedPrefix + indent + roomEntry.Name, rowStyle));
         }
 
         return new Panel(new Rows(rows.ToArray()))
@@ -493,19 +507,66 @@ internal sealed class TuiApplicationService(
     }
 }
 
-internal sealed record RoomListEntry(string Name, int Depth, RoomLeafNode? Room);
-
-internal sealed record RoomViewState(
-    RoomLeafNode Room,
-    IReadOnlyList<RenderedMessage> Messages,
-    string? Error,
-    string Status)
+internal sealed record RoomListEntry
 {
+    public RoomListEntry(string name, int depth, RoomLeafNode? room)
+    {
+        Name = name;
+        Depth = depth;
+        Room = room;
+    }
+
+    public string Name { get; init; }
+
+    public int Depth { get; init; }
+
+    public RoomLeafNode? Room { get; init; }
+}
+
+internal sealed record RoomViewState
+{
+    public RoomViewState(
+        RoomLeafNode room,
+        IReadOnlyList<RenderedMessage> messages,
+        string? error,
+        string status)
+    {
+        Room = room;
+        Messages = messages;
+        Error = error;
+        Status = status;
+    }
+
+    public RoomLeafNode Room { get; init; }
+
+    public IReadOnlyList<RenderedMessage> Messages { get; init; }
+
+    public string? Error { get; init; }
+
+    public string Status { get; init; }
+
     public static RoomViewState Empty(RoomLeafNode room) => new(room, [], null, "Ready.");
 }
 
-internal sealed record InputResult(
-    RoomLeafNode SelectedRoom,
-    RoomViewState RoomState,
-    DateTimeOffset NextRefreshAt,
-    bool Handled);
+internal sealed record InputResult
+{
+    public InputResult(
+        RoomLeafNode selectedRoom,
+        RoomViewState roomState,
+        DateTimeOffset nextRefreshAt,
+        bool handled)
+    {
+        SelectedRoom = selectedRoom;
+        RoomState = roomState;
+        NextRefreshAt = nextRefreshAt;
+        Handled = handled;
+    }
+
+    public RoomLeafNode SelectedRoom { get; init; }
+
+    public RoomViewState RoomState { get; init; }
+
+    public DateTimeOffset NextRefreshAt { get; init; }
+
+    public bool Handled { get; init; }
+}

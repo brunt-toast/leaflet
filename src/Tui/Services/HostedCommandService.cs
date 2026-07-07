@@ -56,4 +56,12 @@ internal sealed class HostedCommandService : IHostedService
     }
 }
 
-internal sealed record CommandLineInvocation(string[] Args);
+internal sealed record CommandLineInvocation
+{
+    public CommandLineInvocation(string[] args)
+    {
+        Args = args;
+    }
+
+    public string[] Args { get; init; }
+}

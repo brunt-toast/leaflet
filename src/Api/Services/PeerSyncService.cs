@@ -8,14 +8,25 @@ using Microsoft.Extensions.Options;
 
 namespace Api.Services;
 
-internal sealed class PeerSyncService(
-    AppDbContext appContext,
-    IHttpClientFactory httpClientFactory,
-    IOptions<PeerSyncOptions> options,
-    ILogger<PeerSyncService> logger) : IPeerSyncService
+internal sealed class PeerSyncService : IPeerSyncService
 {
     private const string KnownServersEndpointPath = "/api/servers";
-    private readonly PeerSyncOptions _peerSyncOptions = options.Value;
+    private readonly AppDbContext _appContext;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly PeerSyncOptions _peerSyncOptions;
+    private readonly ILogger<PeerSyncService> _logger;
+
+    public PeerSyncService(
+        AppDbContext appContext,
+        IHttpClientFactory httpClientFactory,
+        IOptions<PeerSyncOptions> options,
+        ILogger<PeerSyncService> logger)
+    {
+        _appContext = appContext;
+        _httpClientFactory = httpClientFactory;
+        _peerSyncOptions = options.Value;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyCollection<KnownServerDto>> GetOnlineServersAsync(CancellationToken cancellationToken)
     {
@@ -30,7 +41,7 @@ internal sealed class PeerSyncService(
             });
         }
 
-        KnownServerDto[] peers = await appContext.KnownServers
+        KnownServerDto[] peers = await _appContext.KnownServers
             .Where(server => server.IsActive)
             .OrderBy(server => server.Url)
             .Select(server => new KnownServerDto
@@ -53,7 +64,7 @@ internal sealed class PeerSyncService(
     {
         string? publicUrl = TryNormalizeUrl(_peerSyncOptions.PublicUrl);
 
-        string[] peers = await appContext.KnownServers
+        string[] peers = await _appContext.KnownServers
             .Where(server => server.Url != publicUrl)
             .Select(server => server.Url)
             .ToArrayAsync(cancellationToken);
@@ -70,11 +81,11 @@ internal sealed class PeerSyncService(
         string? normalizedPeerUrl = TryNormalizeUrl(peerUrl);
         if (normalizedPeerUrl is null)
         {
-            logger.LogWarning("Skipping invalid peer URL '{PeerUrl}'.", peerUrl);
+            _logger.LogWarning("Skipping invalid peer URL '{PeerUrl}'.", peerUrl);
             return;
         }
 
-        HttpClient client = httpClientFactory.CreateClient(nameof(PeerSyncService));
+        HttpClient client = _httpClientFactory.CreateClient(nameof(PeerSyncService));
         Uri requestUri = BuildKnownServersUri(normalizedPeerUrl, suppressCallback);
 
         try
@@ -82,7 +93,7 @@ internal sealed class PeerSyncService(
             using HttpResponseMessage response = await client.GetAsync(requestUri, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("Polling peer '{PeerUrl}' failed with status code {StatusCode}.", normalizedPeerUrl, response.StatusCode);
+                _logger.LogWarning("Polling peer '{PeerUrl}' failed with status code {StatusCode}.", normalizedPeerUrl, response.StatusCode);
                 await UpsertPeerAsync(normalizedPeerUrl, isActive: false, cancellationToken);
                 return;
             }
@@ -102,7 +113,7 @@ internal sealed class PeerSyncService(
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            logger.LogWarning(ex, "Polling peer '{PeerUrl}' failed.", normalizedPeerUrl);
+            _logger.LogWarning(ex, "Polling peer '{PeerUrl}' failed.", normalizedPeerUrl);
             await UpsertPeerAsync(normalizedPeerUrl, isActive: false, cancellationToken);
         }
     }
@@ -145,7 +156,7 @@ internal sealed class PeerSyncService(
 
         for (int attempt = 0; attempt < 2; attempt++)
         {
-            KnownServerEntity? entity = await appContext.KnownServers
+            KnownServerEntity? entity = await _appContext.KnownServers
                 .SingleOrDefaultAsync(server => server.Url == normalizedPeerUrl, cancellationToken);
 
             if (entity is null)
@@ -158,7 +169,7 @@ internal sealed class PeerSyncService(
                     LastSeenAtUtc = isActive ? now : null,
                 };
 
-                await appContext.AddAsync(entity, cancellationToken);
+                await _appContext.AddAsync(entity, cancellationToken);
             }
             else
             {
@@ -171,12 +182,12 @@ internal sealed class PeerSyncService(
 
             try
             {
-                await appContext.SaveChangesAsync(cancellationToken);
+                await _appContext.SaveChangesAsync(cancellationToken);
                 return;
             }
             catch (DbUpdateException) when (attempt == 0)
             {
-                foreach (var entry in appContext.ChangeTracker.Entries<KnownServerEntity>()
+                foreach (var entry in _appContext.ChangeTracker.Entries<KnownServerEntity>()
                     .Where(entry => entry.Entity.Url == normalizedPeerUrl))
                 {
                     entry.State = EntityState.Detached;

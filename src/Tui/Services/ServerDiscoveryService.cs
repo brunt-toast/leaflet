@@ -5,11 +5,18 @@ using Tui.Configuration;
 
 namespace Tui.Services;
 
-internal sealed class ServerDiscoveryService(
-    HttpClient httpClient,
-    ILogger<ServerDiscoveryService> logger)
+internal sealed class ServerDiscoveryService
 {
-    private readonly ILogger _logger = logger;
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<ServerDiscoveryService> _logger;
+
+    public ServerDiscoveryService(
+        HttpClient httpClient,
+        ILogger<ServerDiscoveryService> logger)
+    {
+        _httpClient = httpClient;
+        _logger = logger;
+    }
 
     public async Task<bool> IsDiscoverableAsync(ServerConfig server, CancellationToken cancellationToken)
     {
@@ -17,7 +24,7 @@ internal sealed class ServerDiscoveryService(
 
         try
         {
-            using HttpResponseMessage response = await httpClient.GetAsync(requestUri, cancellationToken);
+            using HttpResponseMessage response = await _httpClient.GetAsync(requestUri, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Server {ServerUrl} discovery check returned status code {StatusCode}.", server.Url, response.StatusCode);

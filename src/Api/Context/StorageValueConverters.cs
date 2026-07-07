@@ -67,5 +67,16 @@ internal static class StorageValueConverters
         return JsonSerializer.Serialize(new CompositeEnvelope(first, second));
     }
 
-    private sealed record CompositeEnvelope(string mldsa, string slhdsa);
+    private sealed record CompositeEnvelope
+    {
+        public CompositeEnvelope(string mldsa, string slhdsa)
+        {
+            this.mldsa = mldsa;
+            this.slhdsa = slhdsa;
+        }
+
+        public string mldsa { get; init; }
+
+        public string slhdsa { get; init; }
+    }
 }

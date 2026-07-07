@@ -3,18 +3,27 @@ using Microsoft.Extensions.Options;
 
 namespace Api.Services;
 
-internal sealed class PeerPollingBackgroundService(
-    IServiceScopeFactory serviceScopeFactory,
-    IOptions<PeerSyncOptions> options,
-    ILogger<PeerPollingBackgroundService> logger) : BackgroundService
+internal sealed class PeerPollingBackgroundService : BackgroundService
 {
-    private readonly PeerSyncOptions _peerSyncOptions = options.Value;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly PeerSyncOptions _peerSyncOptions;
+    private readonly ILogger<PeerPollingBackgroundService> _logger;
+
+    public PeerPollingBackgroundService(
+        IServiceScopeFactory serviceScopeFactory,
+        IOptions<PeerSyncOptions> options,
+        ILogger<PeerPollingBackgroundService> logger)
+    {
+        _serviceScopeFactory = serviceScopeFactory;
+        _peerSyncOptions = options.Value;
+        _logger = logger;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (_peerSyncOptions.PollIntervalSeconds <= 0)
         {
-            logger.LogWarning("Peer polling is disabled because PollIntervalSeconds is not greater than zero.");
+            _logger.LogWarning("Peer polling is disabled because PollIntervalSeconds is not greater than zero.");
             return;
         }
 
@@ -24,7 +33,7 @@ internal sealed class PeerPollingBackgroundService(
         {
             try
             {
-                using IServiceScope scope = serviceScopeFactory.CreateScope();
+                using IServiceScope scope = _serviceScopeFactory.CreateScope();
                 IPeerSyncService peerSyncService = scope.ServiceProvider.GetRequiredService<IPeerSyncService>();
                 await peerSyncService.PollKnownPeersAsync(stoppingToken);
             }
@@ -34,7 +43,7 @@ internal sealed class PeerPollingBackgroundService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Peer polling iteration failed.");
+                _logger.LogError(ex, "Peer polling iteration failed.");
             }
         }
     }

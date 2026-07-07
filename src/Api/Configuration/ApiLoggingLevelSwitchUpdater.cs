@@ -6,18 +6,27 @@ using Serilog.Events;
 
 namespace Api.Configuration;
 
-internal sealed class ApiLoggingLevelSwitchUpdater(
-    IOptionsMonitor<ApiLoggingOptions> loggingOptionsMonitor,
-    ApiLoggingLevelSwitches levelSwitches,
-    ILogger<ApiLoggingLevelSwitchUpdater> logger) : IHostedService, IDisposable
+internal sealed class ApiLoggingLevelSwitchUpdater : IHostedService, IDisposable
 {
-    private readonly ILogger _logger = logger;
+    private readonly IOptionsMonitor<ApiLoggingOptions> _loggingOptionsMonitor;
+    private readonly ApiLoggingLevelSwitches _levelSwitches;
+    private readonly ILogger _logger;
     private IDisposable? _changeSubscription;
+
+    public ApiLoggingLevelSwitchUpdater(
+        IOptionsMonitor<ApiLoggingOptions> loggingOptionsMonitor,
+        ApiLoggingLevelSwitches levelSwitches,
+        ILogger<ApiLoggingLevelSwitchUpdater> logger)
+    {
+        _loggingOptionsMonitor = loggingOptionsMonitor;
+        _levelSwitches = levelSwitches;
+        _logger = logger;
+    }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        Apply(loggingOptionsMonitor.CurrentValue);
-        _changeSubscription = loggingOptionsMonitor.OnChange(Apply);
+        Apply(_loggingOptionsMonitor.CurrentValue);
+        _changeSubscription = _loggingOptionsMonitor.OnChange(Apply);
         return Task.CompletedTask;
     }
 
@@ -45,8 +54,8 @@ internal sealed class ApiLoggingLevelSwitchUpdater(
             return;
         }
 
-        levelSwitches.Application.MinimumLevel = minimumLevel;
-        levelSwitches.Microsoft.MinimumLevel = microsoftMinimumLevel;
+        _levelSwitches.Application.MinimumLevel = minimumLevel;
+        _levelSwitches.Microsoft.MinimumLevel = microsoftMinimumLevel;
     }
 
     private static bool TryParseLevel(string value, out LogEventLevel level)
@@ -55,6 +64,15 @@ internal sealed class ApiLoggingLevelSwitchUpdater(
     }
 }
 
-internal sealed record ApiLoggingLevelSwitches(
-    LoggingLevelSwitch Application,
-    LoggingLevelSwitch Microsoft);
+internal sealed record ApiLoggingLevelSwitches
+{
+    public ApiLoggingLevelSwitches(LoggingLevelSwitch application, LoggingLevelSwitch microsoft)
+    {
+        Application = application;
+        Microsoft = microsoft;
+    }
+
+    public LoggingLevelSwitch Application { get; init; }
+
+    public LoggingLevelSwitch Microsoft { get; init; }
+}

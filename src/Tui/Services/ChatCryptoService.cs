@@ -78,7 +78,9 @@ internal sealed class ChatCryptoService : IChatCryptoService
                 SenderKeyHash = SenderKeyDisplayFormatter.Format(senderPublicKey),
                 Body = payload.Text,
                 IsVerified = isVerified,
-                IsError = false
+                IsError = false,
+                IsPending = false,
+                DeliveryFailed = false
             };
         }
         catch (Exception ex)
@@ -90,7 +92,9 @@ internal sealed class ChatCryptoService : IChatCryptoService
                 SenderKeyHash = string.Empty,
                 Body = ex.Message,
                 IsVerified = false,
-                IsError = true
+                IsError = true,
+                IsPending = false,
+                DeliveryFailed = false
             };
         }
     }

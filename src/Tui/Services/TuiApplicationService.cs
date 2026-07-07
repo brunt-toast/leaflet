@@ -52,6 +52,8 @@ internal sealed class TuiApplicationService
         DateTimeOffset nextRefreshAt = DateTimeOffset.MinValue;
         DateTimeOffset lastRefreshAt = DateTimeOffset.MinValue;
         RoomViewState roomState = RoomViewState.Empty(selectedRoom);
+        List<PendingLocalMessage> pendingMessages = [];
+        List<PendingSendOperation> pendingSendOperations = [];
         bool needsRender = true;
 
         _console.Cursor.Hide();
@@ -78,6 +80,20 @@ internal sealed class TuiApplicationService
                     needsRender = true;
                 }
 
+                SendProcessingResult sendProcessingResult = await ProcessCompletedSendOperationsAsync(
+                    selectedRoom,
+                    roomState,
+                    pendingMessages,
+                    pendingSendOperations,
+                    cancellationToken);
+                roomState = sendProcessingResult.RoomState;
+                if (sendProcessingResult.ShouldRefreshImmediately)
+                {
+                    nextRefreshAt = DateTimeOffset.MinValue;
+                }
+
+                needsRender |= sendProcessingResult.Handled;
+
                 InputResult inputResult = await HandleInputAsync(
                     roomEntries,
                     selectedRoom,
@@ -85,6 +101,8 @@ internal sealed class TuiApplicationService
                     roomState,
                     nextRefreshAt,
                     server,
+                    pendingMessages,
+                    pendingSendOperations,
                     cancellationToken);
 
                 selectedRoom = inputResult.SelectedRoom;
@@ -94,7 +112,7 @@ internal sealed class TuiApplicationService
 
                 if (needsRender)
                 {
-                    Render(roomEntries, selectedRoom, roomState, composeBuffer, server, lastRefreshAt);
+                    Render(roomEntries, selectedRoom, roomState, composeBuffer, server, lastRefreshAt, pendingMessages);
                     needsRender = false;
                 }
 
@@ -139,6 +157,8 @@ internal sealed class TuiApplicationService
         RoomViewState roomState,
         DateTimeOffset nextRefreshAt,
         ServerConfig server,
+        IList<PendingLocalMessage> pendingMessages,
+        IList<PendingSendOperation> pendingSendOperations,
         CancellationToken cancellationToken)
     {
         bool handled = false;
@@ -168,8 +188,16 @@ internal sealed class TuiApplicationService
                 case ConsoleKey.Enter:
                     if (composeBuffer.Length > 0)
                     {
-                        roomState = await SendMessageAsync(selectedRoom, roomState, composeBuffer, server, cancellationToken);
-                        nextRefreshAt = DateTimeOffset.MinValue;
+                        SendStartResult sendStartResult = StartSendMessage(
+                            selectedRoom,
+                            roomState,
+                            composeBuffer,
+                            server,
+                            pendingMessages,
+                            pendingSendOperations,
+                            cancellationToken);
+                        roomState = sendStartResult.RoomState;
+                        nextRefreshAt = sendStartResult.NextRefreshAt;
                         handled = true;
                     }
 
@@ -198,6 +226,82 @@ internal sealed class TuiApplicationService
         }
 
         return new InputResult(selectedRoom, roomState, nextRefreshAt, handled);
+    }
+
+    private async Task<SendProcessingResult> ProcessCompletedSendOperationsAsync(
+        RoomLeafNode selectedRoom,
+        RoomViewState roomState,
+        IList<PendingLocalMessage> pendingMessages,
+        IList<PendingSendOperation> pendingSendOperations,
+        CancellationToken cancellationToken)
+    {
+        bool handled = false;
+        bool shouldRefreshImmediately = false;
+
+        for (int index = pendingSendOperations.Count - 1; index >= 0; index--)
+        {
+            PendingSendOperation pendingOperation = pendingSendOperations[index];
+            if (!pendingOperation.Completion.IsCompleted)
+            {
+                continue;
+            }
+
+            SendCompletionResult completionResult = await pendingOperation.Completion.WaitAsync(cancellationToken);
+            pendingSendOperations.RemoveAt(index);
+            handled = true;
+
+            PendingLocalMessage? pendingMessage = pendingMessages
+                .SingleOrDefault(message => message.LocalId == pendingOperation.LocalId);
+
+            if (completionResult.Succeeded)
+            {
+                if (pendingMessage is not null)
+                {
+                    pendingMessages.Remove(pendingMessage);
+                }
+
+                shouldRefreshImmediately = true;
+
+                if (selectedRoom.Path == pendingOperation.Room.Path)
+                {
+                    roomState = roomState with
+                    {
+                        Status = "Message sent.",
+                        Error = null
+                    };
+                }
+
+                continue;
+            }
+
+            if (pendingMessage is not null)
+            {
+                RenderedMessage currentMessage = pendingMessage.Message;
+                pendingMessage.Message = new RenderedMessage
+                {
+                    LocalId = currentMessage.LocalId,
+                    SentAtUtc = currentMessage.SentAtUtc,
+                    Sender = currentMessage.Sender,
+                    SenderKeyHash = currentMessage.SenderKeyHash,
+                    Body = currentMessage.Body,
+                    IsVerified = currentMessage.IsVerified,
+                    IsError = currentMessage.IsError,
+                    IsPending = false,
+                    DeliveryFailed = true
+                };
+            }
+
+            if (selectedRoom.Path == pendingOperation.Room.Path)
+            {
+                roomState = roomState with
+                {
+                    Error = null,
+                    Status = $"Send failed: {completionResult.ErrorMessage}"
+                };
+            }
+        }
+
+        return new SendProcessingResult(roomState, handled, shouldRefreshImmediately);
     }
 
     private async Task<RoomViewState> RefreshRoomAsync(
@@ -237,11 +341,13 @@ internal sealed class TuiApplicationService
         }
     }
 
-    private async Task<RoomViewState> SendMessageAsync(
+    private SendStartResult StartSendMessage(
         RoomLeafNode room,
         RoomViewState currentState,
         StringBuilder composeBuffer,
         ServerConfig server,
+        IList<PendingLocalMessage> pendingMessages,
+        IList<PendingSendOperation> pendingSendOperations,
         CancellationToken cancellationToken)
     {
         if (!_config.Identities.TryGetValue(room.IdentityName, out IdentityConfig? identity))
@@ -252,33 +358,52 @@ internal sealed class TuiApplicationService
         string text = composeBuffer.ToString().Trim();
         if (string.IsNullOrEmpty(text))
         {
-            return currentState with
-            {
-                Status = "Message cannot be empty."
-            };
+            return new SendStartResult(
+                currentState with
+                {
+                    Status = "Message cannot be empty."
+                },
+                DateTimeOffset.MinValue);
         }
 
+        string localId = Guid.NewGuid().ToString("N");
+        RenderedMessage pendingMessage = CreatePendingMessage(identity, text, localId);
+        pendingMessages.Add(new PendingLocalMessage(room.Path, localId, pendingMessage));
+        composeBuffer.Clear();
+
+        pendingSendOperations.Add(new PendingSendOperation(
+            localId,
+            room,
+            SendMessageCoreAsync(room, server, identity, text, cancellationToken)));
+
+        return new SendStartResult(
+            currentState with
+            {
+                Status = "Sending message...",
+                Error = null
+            },
+            nextRefreshAt: DateTimeOffset.MaxValue);
+    }
+
+    private async Task<SendCompletionResult> SendMessageCoreAsync(
+        RoomLeafNode room,
+        ServerConfig server,
+        IdentityConfig identity,
+        string text,
+        CancellationToken cancellationToken)
+    {
         try
         {
             server = await ResolveServerAsync(cancellationToken);
             EncryptedMessageDto dto = _cryptoService.CreateEncryptedMessage(room, identity, text);
             await _apiClient.SendMessageAsync(server, dto, cancellationToken);
             _logger.LogInformation("Sent message for room {RoomPath} via server {ServerUrl}.", room.Path, server.Url);
-            composeBuffer.Clear();
-            return currentState with
-            {
-                Status = "Message sent.",
-                Error = null
-            };
+            return SendCompletionResult.Success();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Sending message for room {RoomPath} via server {ServerUrl} failed.", room.Path, server.Url);
-            return currentState with
-            {
-                Error = ex.Message,
-                Status = "Send failed."
-            };
+            return SendCompletionResult.Failure(ex.Message);
         }
     }
 
@@ -288,7 +413,8 @@ internal sealed class TuiApplicationService
         RoomViewState roomState,
         StringBuilder composeBuffer,
         ServerConfig server,
-        DateTimeOffset lastRefreshAt)
+        DateTimeOffset lastRefreshAt,
+        IReadOnlyList<PendingLocalMessage> pendingMessages)
     {
         IdentityConfig identity = _config.Identities[selectedRoom.IdentityName];
 
@@ -306,7 +432,7 @@ internal sealed class TuiApplicationService
             new Layout("Compose").Size(7));
 
         mainLayout["Header"].Update(BuildHeaderPanel(selectedRoom, identity, server, roomState, lastRefreshAt));
-        mainLayout["Messages"].Update(BuildMessagesPanel(roomState));
+        mainLayout["Messages"].Update(BuildMessagesPanel(roomState, pendingMessages));
         mainLayout["Compose"].Update(BuildComposePanel(composeBuffer));
 
         _console.Clear();
@@ -381,7 +507,7 @@ internal sealed class TuiApplicationService
         };
     }
 
-    private Panel BuildMessagesPanel(RoomViewState roomState)
+    private Panel BuildMessagesPanel(RoomViewState roomState, IReadOnlyList<PendingLocalMessage> pendingMessages)
     {
         if (!string.IsNullOrWhiteSpace(roomState.Error))
         {
@@ -393,7 +519,9 @@ internal sealed class TuiApplicationService
             };
         }
 
-        if (roomState.Messages.Count == 0)
+        IReadOnlyList<RenderedMessage> messages = GetVisibleMessages(roomState, pendingMessages);
+
+        if (messages.Count == 0)
         {
             return new Panel(new Markup("[grey]No messages yet.[/]"))
             {
@@ -405,7 +533,7 @@ internal sealed class TuiApplicationService
 
         List<IRenderable> chatRows = [];
 
-        foreach (RenderedMessage message in roomState.Messages)
+        foreach (RenderedMessage message in messages)
         {
             chatRows.Add(BuildMessageMetadataLine(message));
             chatRows.Add(BuildIndentedMessageBody(message));
@@ -487,6 +615,16 @@ internal sealed class TuiApplicationService
 
     private static IRenderable BuildMessageBody(RenderedMessage message)
     {
+        if (message.DeliveryFailed)
+        {
+            return new Markup($"[red]{Markup.Escape(message.Body)}[/]");
+        }
+
+        if (message.IsPending)
+        {
+            return new Markup($"[grey]{Markup.Escape(message.Body)}[/]");
+        }
+
         if (message.IsError)
         {
             return new Markup($"[red]{Markup.Escape(message.Body)}[/]");
@@ -504,14 +642,19 @@ internal sealed class TuiApplicationService
     {
         string timestamp = Markup.Escape(FormatMessageTimestamp(message.SentAtUtc));
         string sender = Markup.Escape(message.Sender);
+        string statusSuffix = message.DeliveryFailed
+            ? " [red](failed)[/]"
+            : message.IsPending
+                ? " [grey](sending...)[/]"
+                : string.Empty;
 
         if (string.IsNullOrWhiteSpace(message.SenderKeyHash))
         {
-            return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/]");
+            return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/]{statusSuffix}");
         }
 
         string senderKeyHash = Markup.Escape(message.SenderKeyHash);
-        return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/] [grey]{senderKeyHash}[/]");
+        return new Markup($"[grey]{timestamp}[/] [blue]{sender}[/] [grey]{senderKeyHash}[/]{statusSuffix}");
     }
 
     private static IRenderable BuildIndentedMessageBody(RenderedMessage message)
@@ -521,6 +664,37 @@ internal sealed class TuiApplicationService
         grid.AddColumn();
         grid.AddRow(new Text("    "), BuildMessageBody(message));
         return grid;
+    }
+
+    private static RenderedMessage CreatePendingMessage(IdentityConfig identity, string text, string localId)
+    {
+        return new RenderedMessage
+        {
+            LocalId = localId,
+            SentAtUtc = DateTimeOffset.UtcNow,
+            Sender = identity.Name,
+            SenderKeyHash = SenderKeyDisplayFormatter.Format(identity.PublicKey),
+            Body = text,
+            IsVerified = true,
+            IsError = false,
+            IsPending = true,
+            DeliveryFailed = false
+        };
+    }
+
+    private static IReadOnlyList<RenderedMessage> GetVisibleMessages(
+        RoomViewState roomState,
+        IReadOnlyList<PendingLocalMessage> pendingMessages)
+    {
+        RenderedMessage[] roomPendingMessages = pendingMessages
+            .Where(message => message.RoomPath == roomState.Room.Path)
+            .Select(message => message.Message)
+            .ToArray();
+
+        return roomState.Messages
+            .Concat(roomPendingMessages)
+            .OrderBy(message => message.SentAtUtc)
+            .ToArray();
     }
 }
 
@@ -586,4 +760,88 @@ internal sealed record InputResult
     public DateTimeOffset NextRefreshAt { get; init; }
 
     public bool Handled { get; init; }
+}
+
+internal sealed record PendingLocalMessage
+{
+    public PendingLocalMessage(string roomPath, string localId, RenderedMessage message)
+    {
+        RoomPath = roomPath;
+        LocalId = localId;
+        Message = message;
+    }
+
+    public string RoomPath { get; init; }
+
+    public string LocalId { get; init; }
+
+    public RenderedMessage Message { get; set; }
+}
+
+internal sealed record PendingSendOperation
+{
+    public PendingSendOperation(string localId, RoomLeafNode room, Task<SendCompletionResult> completion)
+    {
+        LocalId = localId;
+        Room = room;
+        Completion = completion;
+    }
+
+    public string LocalId { get; init; }
+
+    public RoomLeafNode Room { get; init; }
+
+    public Task<SendCompletionResult> Completion { get; init; }
+}
+
+internal sealed record SendStartResult
+{
+    public SendStartResult(RoomViewState roomState, DateTimeOffset nextRefreshAt)
+    {
+        RoomState = roomState;
+        NextRefreshAt = nextRefreshAt;
+    }
+
+    public RoomViewState RoomState { get; init; }
+
+    public DateTimeOffset NextRefreshAt { get; init; }
+}
+
+internal sealed record SendProcessingResult
+{
+    public SendProcessingResult(RoomViewState roomState, bool handled, bool shouldRefreshImmediately)
+    {
+        RoomState = roomState;
+        Handled = handled;
+        ShouldRefreshImmediately = shouldRefreshImmediately;
+    }
+
+    public RoomViewState RoomState { get; init; }
+
+    public bool Handled { get; init; }
+
+    public bool ShouldRefreshImmediately { get; init; }
+}
+
+internal sealed record SendCompletionResult
+{
+    private SendCompletionResult(bool succeeded, string? errorMessage)
+    {
+        Succeeded = succeeded;
+        ErrorMessage = errorMessage;
+    }
+
+    public bool Succeeded { get; init; }
+
+    public string? ErrorMessage { get; init; }
+
+    public static SendCompletionResult Success()
+    {
+        return new SendCompletionResult(true, null);
+    }
+
+    public static SendCompletionResult Failure(string errorMessage)
+    {
+        return new SendCompletionResult(false, errorMessage);
+    }
 }

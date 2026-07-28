@@ -13,7 +13,6 @@
         "**/bin/": true,
         "**/obj/": true,
         "**/TestResults/": true,
-        ".prebootstrap.cache": true,
         "**/BenchmarkDotNet.Artifacts/": true
     },
 

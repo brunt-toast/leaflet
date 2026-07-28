@@ -13,6 +13,8 @@ internal sealed class AppConfigIoService
     private const int NonceBytes = 12;
     private const int KeyBytes = 32;
     private const int TagBytes = 16;
+    private const int DuressPasswordChecksumBytes = 32;
+    private const int GeneratedDuressPasswordBytes = 32;
     private const int IterationCount = 600_000;
 
     private readonly PasswordService _passwordService;
@@ -35,7 +37,10 @@ internal sealed class AppConfigIoService
         string password = _passwordService.GetConfirmedPassword(
             "Choose a config password: ",
             "Confirm config password: ");
-        string encryptedContent = Encrypt(persistedContent, password);
+        string duressPassword = _passwordService.GetConfirmedPassword(
+            "Choose a duress password: ",
+            "Confirm duress password: ");
+        string encryptedContent = Encrypt(persistedContent, password, duressPassword);
         File.WriteAllText(_configPath, encryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         return persistedContent;
     }
@@ -48,7 +53,20 @@ internal sealed class AppConfigIoService
 
     public async Task WriteAsync(string content, string password, CancellationToken ct = default)
     {
-        string encryptedContent = Encrypt(content, password);
+        string? duressPasswordChecksum = null;
+        if (File.Exists(_configPath))
+        {
+            string persistedContent = await File.ReadAllTextAsync(_configPath, ct);
+            duressPasswordChecksum = TryReadDuressPasswordChecksum(persistedContent);
+        }
+
+        string encryptedContent = Encrypt(content, password, duressPasswordChecksum: duressPasswordChecksum);
+        await File.WriteAllTextAsync(_configPath, encryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
+    }
+
+    public async Task WriteAsync(string content, string password, string duressPassword, CancellationToken ct = default)
+    {
+        string encryptedContent = Encrypt(content, password, duressPassword);
         await File.WriteAllTextAsync(_configPath, encryptedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
     }
 
@@ -81,12 +99,28 @@ internal sealed class AppConfigIoService
         return content.StartsWith(Header, StringComparison.Ordinal);
     }
 
-    private static string Encrypt(string plaintext, string password)
+    private static string Encrypt(
+        string plaintext,
+        string password,
+        string? duressPassword = null,
+        string? duressPasswordChecksum = null)
     {
         if (string.IsNullOrWhiteSpace(password))
         {
             throw new InvalidOperationException("Password cannot be empty.");
         }
+
+        if (!string.IsNullOrWhiteSpace(duressPassword))
+        {
+            if (string.Equals(password, duressPassword, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Duress password must be different from the config password.");
+            }
+
+            duressPasswordChecksum = ComputeDuressPasswordChecksum(duressPassword);
+        }
+
+        duressPasswordChecksum ??= GenerateDuressPasswordChecksum();
 
         byte[] salt = RandomNumberGenerator.GetBytes(SaltBytes);
         byte[] nonce = RandomNumberGenerator.GetBytes(NonceBytes);
@@ -112,13 +146,14 @@ internal sealed class AppConfigIoService
             Salt = Convert.ToBase64String(salt),
             Nonce = Convert.ToBase64String(nonce),
             CipherText = Convert.ToBase64String(cipherText),
-            Tag = Convert.ToBase64String(tag)
+            Tag = Convert.ToBase64String(tag),
+            DuressPasswordChecksum = duressPasswordChecksum
         };
 
         return $"{Header}{Environment.NewLine}{JsonConvert.SerializeObject(envelope, Formatting.Indented)}";
     }
 
-    private static string Decrypt(string persistedContent, string password)
+    private string Decrypt(string persistedContent, string password)
     {
         if (!IsEncrypted(persistedContent))
         {
@@ -133,6 +168,12 @@ internal sealed class AppConfigIoService
         string envelopeJson = persistedContent[Header.Length..].Trim();
         ConfigEncryptionEnvelope envelope = JsonConvert.DeserializeObject<ConfigEncryptionEnvelope>(envelopeJson)
             ?? throw new InvalidOperationException("Encrypted config payload is malformed.");
+
+        if (IsDuressPassword(password, envelope.DuressPasswordChecksum))
+        {
+            File.Delete(_configPath);
+            throw new InvalidOperationException("Duress password accepted; config.toml was deleted.");
+        }
 
         byte[] salt = Convert.FromBase64String(envelope.Salt);
         byte[] nonce = Convert.FromBase64String(envelope.Nonce);
@@ -166,6 +207,75 @@ internal sealed class AppConfigIoService
             iterations,
             HashAlgorithmName.SHA256,
             KeyBytes);
+    }
+
+    private static string? TryReadDuressPasswordChecksum(string persistedContent)
+    {
+        if (!IsEncrypted(persistedContent))
+        {
+            return null;
+        }
+
+        string envelopeJson = persistedContent[Header.Length..].Trim();
+        ConfigEncryptionEnvelope? envelope = JsonConvert.DeserializeObject<ConfigEncryptionEnvelope>(envelopeJson);
+        return envelope?.DuressPasswordChecksum;
+    }
+
+    private static bool IsDuressPassword(string password, string? duressPasswordChecksum)
+    {
+        if (string.IsNullOrWhiteSpace(duressPasswordChecksum))
+        {
+            return false;
+        }
+
+        byte[] expectedChecksum = Convert.FromBase64String(duressPasswordChecksum);
+        if (expectedChecksum.Length != DuressPasswordChecksumBytes)
+        {
+            return false;
+        }
+
+        byte[] actualChecksum = ComputeDuressPasswordChecksumBytes(password);
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(actualChecksum, expectedChecksum);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(actualChecksum);
+        }
+    }
+
+    private static string ComputeDuressPasswordChecksum(string password)
+    {
+        byte[] checksum = ComputeDuressPasswordChecksumBytes(password);
+        try
+        {
+            return Convert.ToBase64String(checksum);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(checksum);
+        }
+    }
+
+    private static string GenerateDuressPasswordChecksum()
+    {
+        byte[] passwordBytes = RandomNumberGenerator.GetBytes(GeneratedDuressPasswordBytes);
+        byte[] checksum = Shake256.HashData(passwordBytes, DuressPasswordChecksumBytes);
+        try
+        {
+            return Convert.ToBase64String(checksum);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+            CryptographicOperations.ZeroMemory(checksum);
+        }
+    }
+
+    private static byte[] ComputeDuressPasswordChecksumBytes(string password)
+    {
+        return Shake256.HashData(Encoding.UTF8.GetBytes(password), DuressPasswordChecksumBytes);
     }
 
     private static string AppendIdentity(string content, GeneratedIdentity identity)
@@ -213,4 +323,7 @@ internal sealed class ConfigEncryptionEnvelope
 
     [JsonProperty("tag")]
     public required string Tag { get; init; }
+
+    [JsonProperty("duress_password_checksum")]
+    public string? DuressPasswordChecksum { get; init; }
 }

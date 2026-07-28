@@ -36,7 +36,7 @@ internal sealed class PasswordService
         string confirmPrompt = "Confirm password: ")
     {
         string password = GetPassword(prompt, Guid.NewGuid().ToString());
-        string confirmedPassword = GetPassword(confirmPrompt);
+        string confirmedPassword = GetPassword(confirmPrompt, Guid.NewGuid().ToString());
 
         if (!string.Equals(password, confirmedPassword, StringComparison.Ordinal))
         {

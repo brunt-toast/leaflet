@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <Version>0.1.0</Version>
     <WarningsAsErrors>CA2017;RZ10012</WarningsAsErrors>
     <NoWarn>IDE0290</NoWarn>
   </PropertyGroup>

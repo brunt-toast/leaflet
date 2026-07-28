@@ -13,6 +13,8 @@ public sealed class AppConfigIoServiceTests
 
         [servers.main]
         url = "http://localhost:5011"
+
+        [rooms]
         """;
 
     [TestMethod]
@@ -115,6 +117,93 @@ public sealed class AppConfigIoServiceTests
         {
             DeleteConfigDirectory(firstConfigPath);
             DeleteConfigDirectory(secondConfigPath);
+        }
+    }
+
+    [TestMethod]
+    public async Task AddRoomAsync_WithExistingIdentity_AppendsRoom()
+    {
+        string configPath = CreateConfigPath();
+        try
+        {
+            await File.WriteAllTextAsync(configPath, """
+                [identities.IdentityA]
+                name = "IdentityA"
+                public_key = "public"
+                private_key = "private"
+
+                [servers.main]
+                url = "http://localhost:5011"
+
+                [rooms]
+                """);
+
+            AppConfigIoService service = new(configPath, null!);
+
+            await service.AddRoomAsync(
+                new NewRoomConfig
+                {
+                    PathSegments = ["Group1", "Room1"],
+                    Key = "quoted \"room\" key",
+                    IdentityName = "IdentityA"
+                },
+                identity: null);
+
+            string updatedContent = await File.ReadAllTextAsync(configPath);
+            StringAssert.Contains(updatedContent, "[rooms.Group1.Room1]");
+            StringAssert.Contains(updatedContent, "key = \"quoted \\\"room\\\" key\"");
+            StringAssert.Contains(updatedContent, "identity = \"IdentityA\"");
+        }
+        finally
+        {
+            DeleteConfigDirectory(configPath);
+        }
+    }
+
+    [TestMethod]
+    public async Task AddRoomAsync_WithGeneratedIdentity_AppendsIdentityAndRoom()
+    {
+        string configPath = CreateConfigPath();
+        try
+        {
+            await File.WriteAllTextAsync(configPath, """
+                [identities.IdentityA]
+                name = "IdentityA"
+                public_key = "public"
+                private_key = "private"
+
+                [servers.main]
+                url = "http://localhost:5011"
+
+                [rooms]
+                """);
+
+            GeneratedIdentity generatedIdentity = new()
+            {
+                Name = "IdentityB",
+                PublicKey = "generated-public",
+                PrivateKey = "generated-private"
+            };
+            AppConfigIoService service = new(configPath, null!);
+
+            await service.AddRoomAsync(
+                new NewRoomConfig
+                {
+                    PathSegments = ["Group1", "Room2"],
+                    Key = "room key",
+                    IdentityName = "IdentityB"
+                },
+                generatedIdentity);
+
+            string updatedContent = await File.ReadAllTextAsync(configPath);
+            StringAssert.Contains(updatedContent, "[identities.IdentityB]");
+            StringAssert.Contains(updatedContent, "public_key = '''generated-public'''");
+            StringAssert.Contains(updatedContent, "[rooms.Group1.Room2]");
+            StringAssert.Contains(updatedContent, "identity = \"IdentityB\"");
+        }
+        finally
+        {
+            DeleteConfigDirectory(configPath);
         }
     }
 

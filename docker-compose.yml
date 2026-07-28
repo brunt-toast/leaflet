@@ -1,0 +1,17 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+    ports:
+      - "5011:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__AppContext: Data Source=/app/data/app.db
+      PeerSync__PublicUrl: http://localhost:5011
+      UseHttpsRedirection: "false"
+    volumes:
+      - api-data:/app/data
+
+volumes:
+  api-data:

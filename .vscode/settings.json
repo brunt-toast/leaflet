@@ -2,7 +2,9 @@
     "files.associations": {
         "nuget.config": "xml",
         "Directory.Build.targets": "xml",
-        "*.rsp": "shellscript"
+        "*.rsp": "shellscript",
+        "*.slnLaunch": "json",
+        "*.slnLaunch.user": "json",
     },
 
     "files.exclude": {
@@ -11,7 +13,7 @@
         "**/bin/": true,
         "**/obj/": true,
         "**/TestResults/": true,
-        ".prebootstrap.cache": true,
+        "**/BenchmarkDotNet.Artifacts/": true
     },
 
     "explorer.fileNesting.enabled": true,

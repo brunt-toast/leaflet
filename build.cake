@@ -1,5 +1,6 @@
-var target = Argument("target", "Run");
+var target = Argument("target", "RunClient");
 var configuration = Argument("configuration", "Release");
+var benchmarkFilter = Argument("benchmarkFilter", "*");
 
 Task("InstallSdk")
 .Does(() =>
@@ -19,11 +20,21 @@ Task("InstallSdk")
         }
     });
 
-Task("Run")
+Task("RunClient")
     .IsDependentOn("InstallSdk")
     .Does(() =>
     {
-        DotNetRun("./src/SampleApp.UI/SampleApp.UI.csproj", new DotNetRunSettings
+        DotNetRun("./src/Tui/Tui.csproj", new DotNetRunSettings
+        {
+            Configuration = configuration,
+        });
+    });
+
+Task("RunServer")
+    .IsDependentOn("InstallSdk")
+    .Does(() =>
+    {
+        DotNetRun("./src/Api/Api.csproj", new DotNetRunSettings
         {
             Configuration = configuration,
         });
@@ -51,6 +62,24 @@ Task("GenerateCoverage")
         ReportGenerator(new GlobPattern("**/coverage.cobertura.xml"), Directory("./coveragereport"), new ReportGeneratorSettings
         {
             ReportTypes = [ReportGeneratorReportType.Html],
+        });
+    });
+
+Task("Benchmark")
+    .IsDependentOn("InstallSdk")
+    .Does(() =>
+    {
+        const string benchmarkProject = "./bench/Api.Benchmarks/Api.Benchmarks.csproj";
+        string benchmarkDll = $"./bench/Api.Benchmarks/bin/{configuration}/net10.0/Api.Benchmarks.dll";
+
+        DotNetBuild(benchmarkProject, new DotNetBuildSettings
+        {
+            Configuration = configuration,
+        });
+
+        StartProcess("dotnet", new ProcessSettings
+        {
+            Arguments = $"{benchmarkDll} --filter \"{benchmarkFilter}\"",
         });
     });
 

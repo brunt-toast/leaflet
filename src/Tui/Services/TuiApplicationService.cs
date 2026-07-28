@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Core.Dto;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,6 +23,8 @@ internal sealed class TuiApplicationService
     private readonly MessagingApiClientService _apiClient;
     private readonly ServerDiscoveryService _serverDiscoveryService;
     private readonly IChatCryptoService _cryptoService;
+    private readonly AppConfigIoService _appConfigIoService;
+    private readonly IdentityGeneratorService _identityGenerator;
     private readonly IAnsiConsole _console;
     private readonly ILogger<TuiApplicationService> _logger;
 
@@ -30,6 +33,8 @@ internal sealed class TuiApplicationService
         MessagingApiClientService apiClient,
         ServerDiscoveryService serverDiscoveryService,
         IChatCryptoService cryptoService,
+        AppConfigIoService appConfigIoService,
+        IdentityGeneratorService identityGenerator,
         IAnsiConsole console,
         ILogger<TuiApplicationService> logger)
     {
@@ -38,6 +43,8 @@ internal sealed class TuiApplicationService
         _apiClient = apiClient;
         _serverDiscoveryService = serverDiscoveryService;
         _cryptoService = cryptoService;
+        _appConfigIoService = appConfigIoService;
+        _identityGenerator = identityGenerator;
         _console = console;
         _logger = logger;
     }
@@ -63,6 +70,7 @@ internal sealed class TuiApplicationService
         RoomViewState roomState = RoomViewState.Empty(selectedRoom);
         List<PendingLocalMessage> pendingMessages = [];
         List<PendingSendOperation> pendingSendOperations = [];
+        AddRoomDialogState? addRoomDialog = null;
         bool needsRender = true;
         TerminalSize terminalSize = GetTerminalSize();
 
@@ -77,7 +85,8 @@ internal sealed class TuiApplicationService
                 composeBuffer,
                 server,
                 lastRefreshAt,
-                pendingMessages);
+                pendingMessages,
+                addRoomDialog);
 
             await _console
                 .Live(initialLayout)
@@ -149,11 +158,14 @@ internal sealed class TuiApplicationService
                         server,
                         pendingMessages,
                         pendingSendOperations,
+                        addRoomDialog,
                         cancellationToken);
 
+                    roomEntries = inputResult.RoomEntries;
                     selectedRoom = inputResult.SelectedRoom;
                     roomState = inputResult.RoomState;
                     nextRefreshAt = inputResult.NextRefreshAt;
+                    addRoomDialog = inputResult.AddRoomDialog;
                     needsRender |= inputResult.Handled;
 
                     if (needsRender)
@@ -166,7 +178,8 @@ internal sealed class TuiApplicationService
                             composeBuffer,
                             server,
                             lastRefreshAt,
-                            pendingMessages);
+                            pendingMessages,
+                            addRoomDialog);
                         needsRender = false;
                     }
 
@@ -214,6 +227,7 @@ internal sealed class TuiApplicationService
         ServerConfig server,
         IList<PendingLocalMessage> pendingMessages,
         IList<PendingSendOperation> pendingSendOperations,
+        AddRoomDialogState? addRoomDialog,
         CancellationToken cancellationToken)
     {
         bool handled = false;
@@ -222,8 +236,45 @@ internal sealed class TuiApplicationService
         {
             ConsoleKeyInfo keyInfo = Console.ReadKey(intercept: true);
 
+            if (addRoomDialog is not null)
+            {
+                AddRoomInputResult addRoomInputResult = await HandleAddRoomInputAsync(
+                    addRoomDialog,
+                    roomEntries,
+                    keyInfo,
+                    cancellationToken);
+                addRoomDialog = addRoomInputResult.Dialog;
+                handled = true;
+
+                if (addRoomInputResult.Succeeded && addRoomInputResult.Room is not null)
+                {
+                    roomEntries = BuildRoomEntries(_config.RoomsRoot);
+                    selectedRoom = addRoomInputResult.Room;
+                    roomState = RoomViewState.Empty(selectedRoom) with
+                    {
+                        Status = "Room added."
+                    };
+                    composeBuffer.Clear();
+                    nextRefreshAt = DateTimeOffset.MinValue;
+                }
+                else if (!string.IsNullOrWhiteSpace(addRoomInputResult.Message))
+                {
+                    roomState = roomState with
+                    {
+                        Status = addRoomInputResult.Message,
+                        Error = null
+                    };
+                }
+
+                continue;
+            }
+
             switch (keyInfo.Key)
             {
+                case ConsoleKey.F1:
+                    addRoomDialog = AddRoomDialogState.Create(_config.Identities.Keys);
+                    handled = true;
+                    break;
                 case ConsoleKey.UpArrow:
                     selectedRoom = MoveRoomSelection(roomEntries, selectedRoom, -1);
                     handled = true;
@@ -280,7 +331,295 @@ internal sealed class TuiApplicationService
             }
         }
 
-        return new InputResult(selectedRoom, roomState, nextRefreshAt, handled);
+        return new InputResult(roomEntries, selectedRoom, roomState, nextRefreshAt, addRoomDialog, handled);
+    }
+
+    private async Task<AddRoomInputResult> HandleAddRoomInputAsync(
+        AddRoomDialogState dialog,
+        IReadOnlyList<RoomListEntry> roomEntries,
+        ConsoleKeyInfo keyInfo,
+        CancellationToken cancellationToken)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Escape:
+                return AddRoomInputResult.Cancel("Add room cancelled.");
+            case ConsoleKey.Backspace:
+                dialog.RemoveCharacter();
+                return AddRoomInputResult.Continue(dialog);
+            case ConsoleKey.Enter:
+                return await AdvanceAddRoomDialogAsync(dialog, roomEntries, cancellationToken);
+            case ConsoleKey.UpArrow:
+                dialog.MoveIdentitySelection(-1);
+                return AddRoomInputResult.Continue(dialog);
+            case ConsoleKey.DownArrow:
+                dialog.MoveIdentitySelection(1);
+                return AddRoomInputResult.Continue(dialog);
+            default:
+                if (!char.IsControl(keyInfo.KeyChar))
+                {
+                    dialog.AppendCharacter(keyInfo.KeyChar);
+                }
+
+                return AddRoomInputResult.Continue(dialog);
+        }
+    }
+
+    private async Task<AddRoomInputResult> AdvanceAddRoomDialogAsync(
+        AddRoomDialogState dialog,
+        IReadOnlyList<RoomListEntry> roomEntries,
+        CancellationToken cancellationToken)
+    {
+        if (dialog.Step == AddRoomDialogStep.RoomName)
+        {
+            string? roomPathValidationMessage = ValidateRoomPath(dialog.RoomName, roomEntries);
+            if (roomPathValidationMessage is not null)
+            {
+                dialog.Error = roomPathValidationMessage;
+                return AddRoomInputResult.Continue(dialog);
+            }
+
+            dialog.Step = AddRoomDialogStep.RoomKey;
+            dialog.Error = null;
+            return AddRoomInputResult.Continue(dialog);
+        }
+
+        if (dialog.Step == AddRoomDialogStep.RoomKey)
+        {
+            if (string.IsNullOrWhiteSpace(dialog.RoomKey))
+            {
+                dialog.Error = "Room key is required.";
+                return AddRoomInputResult.Continue(dialog);
+            }
+
+            dialog.Step = AddRoomDialogStep.Identity;
+            dialog.Error = null;
+            return AddRoomInputResult.Continue(dialog);
+        }
+
+        if (dialog.Step == AddRoomDialogStep.Identity)
+        {
+            string identityName = dialog.SelectedIdentityName;
+            if (string.Equals(identityName, AddRoomIdentitySelection.NewIdentity, StringComparison.Ordinal))
+            {
+                dialog.Step = AddRoomDialogStep.NewIdentityName;
+                dialog.Error = null;
+                return AddRoomInputResult.Continue(dialog);
+            }
+
+            return await SaveAddedRoomAsync(dialog.RoomPathSegments, dialog.RoomKey.Trim(), identityName, generatedIdentity: null, cancellationToken);
+        }
+
+        string newIdentityName = dialog.NewIdentityName.Trim();
+        string? validationMessage = ValidateNewIdentityName(newIdentityName);
+        if (validationMessage is not null)
+        {
+            dialog.Error = validationMessage;
+            return AddRoomInputResult.Continue(dialog);
+        }
+
+        GeneratedIdentity generatedIdentity = _identityGenerator.Generate(newIdentityName);
+        return await SaveAddedRoomAsync(dialog.RoomPathSegments, dialog.RoomKey.Trim(), generatedIdentity.Name, generatedIdentity, cancellationToken);
+    }
+
+    private async Task<AddRoomInputResult> SaveAddedRoomAsync(
+        IReadOnlyList<string> roomPathSegments,
+        string roomKey,
+        string identityName,
+        GeneratedIdentity? generatedIdentity,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            RoomLeafNode room = new()
+            {
+                Name = roomPathSegments[^1],
+                Path = $"rooms.{string.Join('.', roomPathSegments)}",
+                Key = roomKey,
+                IdentityName = identityName
+            };
+
+            await _appConfigIoService.AddRoomAsync(
+                new NewRoomConfig
+                {
+                    PathSegments = roomPathSegments,
+                    Key = roomKey,
+                    IdentityName = identityName
+                },
+                generatedIdentity,
+                cancellationToken);
+
+            AddRoomToConfig(room, generatedIdentity);
+            _logger.LogInformation("Added room {RoomPath} with identity {IdentityName}.", room.Path, identityName);
+            return AddRoomInputResult.Success(room);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Adding a room failed.");
+            return AddRoomInputResult.Failure($"Add room failed: {ex.Message}");
+        }
+    }
+
+    private void AddRoomToConfig(RoomLeafNode room, GeneratedIdentity? generatedIdentity)
+    {
+        if (generatedIdentity is not null)
+        {
+            Dictionary<string, IdentityConfig> identities = _config.Identities.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                StringComparer.OrdinalIgnoreCase);
+            identities[generatedIdentity.Name] = new IdentityConfig
+            {
+                Name = generatedIdentity.Name,
+                PublicKey = generatedIdentity.PublicKey,
+                PrivateKey = generatedIdentity.PrivateKey
+            };
+            _config.Identities = identities;
+        }
+
+        _config.RoomsRoot = AddRoomToGroup(_config.RoomsRoot, room.Path["rooms.".Length..].Split('.'), room);
+    }
+
+    private static RoomGroupNode AddRoomToGroup(RoomGroupNode group, IReadOnlyList<string> roomPathSegments, RoomLeafNode room)
+    {
+        string nextSegment = roomPathSegments[0];
+        if (roomPathSegments.Count == 1)
+        {
+            return new RoomGroupNode
+            {
+                Name = group.Name,
+                Path = group.Path,
+                Children = group.Children
+                    .Concat([room])
+                    .OrderBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            };
+        }
+
+        List<RoomTreeNode> children = group.Children.ToList();
+        RoomGroupNode? existingGroup = children
+            .OfType<RoomGroupNode>()
+            .SingleOrDefault(child => string.Equals(child.Name, nextSegment, StringComparison.OrdinalIgnoreCase));
+
+        RoomGroupNode childGroup = existingGroup ?? new RoomGroupNode
+        {
+            Name = nextSegment,
+            Path = $"{group.Path}.{nextSegment}",
+            Children = []
+        };
+
+        RoomGroupNode updatedChildGroup = AddRoomToGroup(childGroup, roomPathSegments.Skip(1).ToArray(), room);
+        if (existingGroup is not null)
+        {
+            children.Remove(existingGroup);
+        }
+
+        children.Add(updatedChildGroup);
+        return new RoomGroupNode
+        {
+            Name = group.Name,
+            Path = group.Path,
+            Children = children
+                .OrderBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
+    }
+
+    private string? ValidateNewIdentityName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "Identity name is required.";
+        }
+
+        if (!Regex.IsMatch(value, "^[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant))
+        {
+            return "Use letters, numbers, underscores, or hyphens.";
+        }
+
+        if (_config.Identities.ContainsKey(value))
+        {
+            return "That identity already exists.";
+        }
+
+        return null;
+    }
+
+    private string? ValidateRoomPath(string value, IReadOnlyList<RoomListEntry> roomEntries)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "Room name is required.";
+        }
+
+        string[] segments = NormalizeRoomPathSegments(value);
+        if (segments.Length == 0)
+        {
+            return "Room name is required.";
+        }
+
+        if (segments.Any(static segment => string.IsNullOrWhiteSpace(segment)))
+        {
+            return "Room name cannot contain empty groups.";
+        }
+
+        if (segments.Any(static segment => !Regex.IsMatch(segment, "^[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant)))
+        {
+            return "Use letters, numbers, underscores, hyphens, dots, or slashes.";
+        }
+
+        string roomPath = $"rooms.{string.Join('.', segments)}";
+        if (roomEntries.Any(entry => entry.Room is not null && string.Equals(entry.Room.Path, roomPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            return "That room already exists.";
+        }
+
+        if (RoomPathConflictsWithExistingTree(_config.RoomsRoot, roomPath))
+        {
+            return "That room name conflicts with an existing room or group.";
+        }
+
+        return null;
+    }
+
+    internal static string[] NormalizeRoomPathSegments(string value)
+    {
+        return value
+            .Split(['.', '/'], StringSplitOptions.None)
+            .Select(static segment => segment.Trim())
+            .ToArray();
+    }
+
+    private static bool RoomPathConflictsWithExistingTree(RoomTreeNode node, string roomPath)
+    {
+        if (node.Path.Equals(roomPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (node is RoomLeafNode room)
+        {
+            return roomPath.StartsWith($"{room.Path}.", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (node is not RoomGroupNode group)
+        {
+            return false;
+        }
+
+        foreach (RoomTreeNode child in group.Children)
+        {
+            if (RoomPathConflictsWithExistingTree(child, roomPath))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<SendProcessingResult> ProcessCompletedSendOperationsAsync(
@@ -483,7 +822,8 @@ internal sealed class TuiApplicationService
         StringBuilder composeBuffer,
         ServerConfig server,
         DateTimeOffset lastRefreshAt,
-        IReadOnlyList<PendingLocalMessage> pendingMessages)
+        IReadOnlyList<PendingLocalMessage> pendingMessages,
+        AddRoomDialogState? addRoomDialog)
     {
         context.UpdateTarget(BuildRootLayout(
             roomEntries,
@@ -492,7 +832,8 @@ internal sealed class TuiApplicationService
             composeBuffer,
             server,
             lastRefreshAt,
-            pendingMessages));
+            pendingMessages,
+            addRoomDialog));
         context.Refresh();
     }
 
@@ -503,28 +844,46 @@ internal sealed class TuiApplicationService
         StringBuilder composeBuffer,
         ServerConfig server,
         DateTimeOffset lastRefreshAt,
-        IReadOnlyList<PendingLocalMessage> pendingMessages)
+        IReadOnlyList<PendingLocalMessage> pendingMessages,
+        AddRoomDialogState? addRoomDialog)
     {
         IdentityConfig identity = _config.Identities[selectedRoom.IdentityName];
 
         Layout root = new("Root");
-        root.SplitColumns(
+        root.SplitRows(
+            new Layout("App"),
+            new Layout("Hints").Size(1));
+
+        root["App"].SplitColumns(
             new Layout("Rooms").Size(RoomsPanelWidth),
             new Layout("Main"));
 
-        root["Rooms"].Update(BuildRoomsPanel(roomEntries, selectedRoom));
+        root["App"]["Rooms"].Update(BuildRoomsPanel(roomEntries, selectedRoom));
+        root["Hints"].Update(BuildHintRow(addRoomDialog));
 
-        Layout mainLayout = root["Main"];
+        Layout mainLayout = root["App"]["Main"];
         mainLayout.SplitRows(
             new Layout("Header").Size(HeaderPanelHeight),
             new Layout("Messages"),
             new Layout("Compose").Size(ComposePanelHeight));
 
         mainLayout["Header"].Update(BuildHeaderPanel(selectedRoom, identity, server, roomState, lastRefreshAt));
-        mainLayout["Messages"].Update(BuildMessagesPanel(roomState, pendingMessages));
+        mainLayout["Messages"].Update(addRoomDialog is null
+            ? BuildMessagesPanel(roomState, pendingMessages)
+            : BuildAddRoomDialogPanel(addRoomDialog));
         mainLayout["Compose"].Update(BuildComposePanel(composeBuffer));
 
         return root;
+    }
+
+    private static IRenderable BuildHintRow(AddRoomDialogState? addRoomDialog)
+    {
+        if (addRoomDialog is not null)
+        {
+            return new Markup("[black on grey] Enter [/][grey] Next/save [/][black on grey] Esc [/][grey] Cancel [/][black on grey] Up/Down [/][grey] Select identity [/]");
+        }
+
+        return new Markup("[black on grey] F1 [/][grey] Add room [/][black on grey] Up/Down [/][grey] Change room [/][black on grey] Enter [/][grey] Send [/][black on grey] Esc [/][grey] Clear draft [/]");
     }
 
     private Panel BuildRoomsPanel(IReadOnlyList<RoomListEntry> roomEntries, RoomLeafNode selectedRoom)
@@ -642,10 +1001,63 @@ internal sealed class TuiApplicationService
         };
     }
 
+    private static Panel BuildAddRoomDialogPanel(AddRoomDialogState dialog)
+    {
+        List<IRenderable> rows = [];
+
+        rows.Add(new Markup("[bold]Room name[/]"));
+        rows.Add(BuildInputLine(dialog.Step == AddRoomDialogStep.RoomName, dialog.RoomName, "Group1.Room1"));
+        rows.Add(new Text(string.Empty));
+        rows.Add(new Markup("[bold]Room key[/]"));
+        rows.Add(BuildInputLine(dialog.Step == AddRoomDialogStep.RoomKey, dialog.RoomKey, "Required"));
+        rows.Add(new Text(string.Empty));
+        rows.Add(new Markup("[bold]Identity[/]"));
+
+        for (int index = 0; index < dialog.IdentityChoices.Count; index++)
+        {
+            string choice = dialog.IdentityChoices[index];
+            bool selected = dialog.Step == AddRoomDialogStep.Identity && index == dialog.SelectedIdentityIndex;
+            string prefix = selected ? "> " : "  ";
+            Style style = selected
+                ? new Style(Color.Black, Color.Yellow)
+                : Style.Plain;
+            rows.Add(new Text(prefix + choice, style));
+        }
+
+        if (dialog.Step == AddRoomDialogStep.NewIdentityName)
+        {
+            rows.Add(new Text(string.Empty));
+            rows.Add(new Markup("[bold]New identity name[/]"));
+            rows.Add(BuildInputLine(isActive: true, dialog.NewIdentityName, "Required"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(dialog.Error))
+        {
+            rows.Add(new Text(string.Empty));
+            rows.Add(new Markup($"[red]{Markup.Escape(dialog.Error)}[/]"));
+        }
+
+        return new Panel(new Rows(rows.ToArray()))
+        {
+            Header = new PanelHeader("Add Room"),
+            Border = BoxBorder.Rounded,
+            Expand = true
+        };
+    }
+
+    private static IRenderable BuildInputLine(bool isActive, string value, string placeholder)
+    {
+        string text = string.IsNullOrEmpty(value)
+            ? $"[grey]{Markup.Escape(placeholder)}[/]"
+            : Markup.Escape(value);
+        string cursor = isActive ? "[yellow]_[/]" : string.Empty;
+        return new Markup($"  {text}{cursor}");
+    }
+
     private Panel BuildComposePanel(StringBuilder composeBuffer)
     {
         string draft = composeBuffer.Length == 0
-            ? "Type a message and press Enter to send. Use Up/Down to change rooms."
+            ? "Type a message and press Enter to send."
             : composeBuffer.ToString();
 
         string style = composeBuffer.Length == 0 ? "grey" : "white";
@@ -836,7 +1248,7 @@ internal sealed class TuiApplicationService
     private int GetAvailableMessageRows()
     {
         int consoleHeight = _console.Profile.Height;
-        int reservedRows = HeaderPanelHeight + ComposePanelHeight;
+        int reservedRows = HeaderPanelHeight + ComposePanelHeight + 1;
         int availableRows = consoleHeight - reservedRows - 2;
         return Math.Max(1, availableRows);
     }
@@ -968,16 +1380,22 @@ internal sealed record RoomViewState
 internal sealed record InputResult
 {
     public InputResult(
+        IReadOnlyList<RoomListEntry> roomEntries,
         RoomLeafNode selectedRoom,
         RoomViewState roomState,
         DateTimeOffset nextRefreshAt,
+        AddRoomDialogState? addRoomDialog,
         bool handled)
     {
+        RoomEntries = roomEntries;
         SelectedRoom = selectedRoom;
         RoomState = roomState;
         NextRefreshAt = nextRefreshAt;
+        AddRoomDialog = addRoomDialog;
         Handled = handled;
     }
+
+    public IReadOnlyList<RoomListEntry> RoomEntries { get; init; }
 
     public RoomLeafNode SelectedRoom { get; init; }
 
@@ -985,7 +1403,148 @@ internal sealed record InputResult
 
     public DateTimeOffset NextRefreshAt { get; init; }
 
+    public AddRoomDialogState? AddRoomDialog { get; init; }
+
     public bool Handled { get; init; }
+}
+
+internal static class AddRoomIdentitySelection
+{
+    public const string NewIdentity = "New identity";
+}
+
+internal enum AddRoomDialogStep
+{
+    RoomName,
+    RoomKey,
+    Identity,
+    NewIdentityName
+}
+
+internal sealed class AddRoomDialogState
+{
+    private AddRoomDialogState(IReadOnlyList<string> identityChoices)
+    {
+        IdentityChoices = identityChoices;
+    }
+
+    public AddRoomDialogStep Step { get; set; }
+
+    public string RoomName { get; private set; } = string.Empty;
+
+    public string RoomKey { get; private set; } = string.Empty;
+
+    public string NewIdentityName { get; set; } = string.Empty;
+
+    public IReadOnlyList<string> IdentityChoices { get; init; }
+
+    public int SelectedIdentityIndex { get; private set; }
+
+    public string? Error { get; set; }
+
+    public string SelectedIdentityName => IdentityChoices[SelectedIdentityIndex];
+
+    public IReadOnlyList<string> RoomPathSegments => TuiApplicationService.NormalizeRoomPathSegments(RoomName);
+
+    public static AddRoomDialogState Create(IEnumerable<string> identityNames)
+    {
+        List<string> choices = identityNames
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        choices.Add(AddRoomIdentitySelection.NewIdentity);
+        return new AddRoomDialogState(choices);
+    }
+
+    public void AppendCharacter(char character)
+    {
+        Error = null;
+        if (Step == AddRoomDialogStep.RoomName)
+        {
+            RoomName += character;
+            return;
+        }
+
+        if (Step == AddRoomDialogStep.RoomKey)
+        {
+            RoomKey += character;
+            return;
+        }
+
+        if (Step == AddRoomDialogStep.NewIdentityName)
+        {
+            NewIdentityName += character;
+        }
+    }
+
+    public void RemoveCharacter()
+    {
+        Error = null;
+        if (Step == AddRoomDialogStep.RoomName && RoomName.Length > 0)
+        {
+            RoomName = RoomName[..^1];
+            return;
+        }
+
+        if (Step == AddRoomDialogStep.RoomKey && RoomKey.Length > 0)
+        {
+            RoomKey = RoomKey[..^1];
+            return;
+        }
+
+        if (Step == AddRoomDialogStep.NewIdentityName && NewIdentityName.Length > 0)
+        {
+            NewIdentityName = NewIdentityName[..^1];
+        }
+    }
+
+    public void MoveIdentitySelection(int direction)
+    {
+        if (Step != AddRoomDialogStep.Identity)
+        {
+            return;
+        }
+
+        SelectedIdentityIndex = Math.Clamp(SelectedIdentityIndex + direction, 0, IdentityChoices.Count - 1);
+    }
+}
+
+internal sealed record AddRoomInputResult
+{
+    private AddRoomInputResult(AddRoomDialogState? dialog, bool succeeded, RoomLeafNode? room, string? message)
+    {
+        Dialog = dialog;
+        Succeeded = succeeded;
+        Room = room;
+        Message = message;
+    }
+
+    public AddRoomDialogState? Dialog { get; init; }
+
+    public bool Succeeded { get; init; }
+
+    public RoomLeafNode? Room { get; init; }
+
+    public string? Message { get; init; }
+
+    public static AddRoomInputResult Continue(AddRoomDialogState dialog)
+    {
+        return new AddRoomInputResult(dialog, false, null, null);
+    }
+
+    public static AddRoomInputResult Success(RoomLeafNode room)
+    {
+        return new AddRoomInputResult(null, true, room, null);
+    }
+
+    public static AddRoomInputResult Failure(string message)
+    {
+        return new AddRoomInputResult(null, false, null, message);
+    }
+
+    public static AddRoomInputResult Cancel(string message)
+    {
+        return new AddRoomInputResult(null, false, null, message);
+    }
 }
 
 internal sealed record PendingLocalMessage

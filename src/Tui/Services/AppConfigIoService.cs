@@ -94,6 +94,30 @@ internal sealed class AppConfigIoService
         await File.WriteAllTextAsync(_configPath, updatedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
     }
 
+    public async Task AddRoomAsync(NewRoomConfig room, GeneratedIdentity? identity, CancellationToken ct = default)
+    {
+        string persistedContent = await File.ReadAllTextAsync(_configPath, ct);
+        bool isEncrypted = IsEncrypted(persistedContent);
+        string? password = null;
+        string content = persistedContent;
+
+        if (isEncrypted)
+        {
+            password = _passwordService.GetPassword("Config password: ");
+            content = Decrypt(persistedContent, password);
+        }
+
+        string updatedContent = AppendRoom(content, room, identity);
+
+        if (isEncrypted)
+        {
+            await WriteAsync(updatedContent, password!, ct);
+            return;
+        }
+
+        await File.WriteAllTextAsync(_configPath, updatedContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
+    }
+
     private static bool IsEncrypted(string content)
     {
         return content.StartsWith(Header, StringComparison.Ordinal);
@@ -302,6 +326,106 @@ internal sealed class AppConfigIoService
         string trimmedContent = content.TrimEnd();
         return $"{trimmedContent}{Environment.NewLine}{Environment.NewLine}{snippet}{Environment.NewLine}";
     }
+
+    private static string AppendRoom(string content, NewRoomConfig room, GeneratedIdentity? identity)
+    {
+        TomlTable root = TomlSerializer.Deserialize<TomlTable>(content)
+            ?? throw new InvalidOperationException("Could not parse config.toml.");
+
+        if (!root.TryGetValue("rooms", out object roomsValue) || roomsValue is not TomlTable roomsTable)
+        {
+            throw new InvalidOperationException("config.toml must contain a [rooms] section.");
+        }
+
+        if (RoomPathExists(roomsTable, room.PathSegments))
+        {
+            throw new InvalidOperationException($"Room '{string.Join('.', room.PathSegments)}' already exists in config.toml.");
+        }
+
+        if (!root.TryGetValue("identities", out object identitiesValue) || identitiesValue is not TomlTable identitiesTable)
+        {
+            throw new InvalidOperationException("config.toml must contain an [identities] section.");
+        }
+
+        if (identity is not null && identitiesTable.ContainsKey(identity.Name))
+        {
+            throw new InvalidOperationException($"Identity '{identity.Name}' already exists in config.toml.");
+        }
+
+        if (identity is null && !identitiesTable.ContainsKey(room.IdentityName))
+        {
+            throw new InvalidOperationException($"Identity '{room.IdentityName}' does not exist in config.toml.");
+        }
+
+        string trimmedContent = content.TrimEnd();
+        StringBuilder builder = new(trimmedContent);
+
+        if (identity is not null)
+        {
+            builder
+                .AppendLine()
+                .AppendLine()
+                .AppendLine($"[identities.{identity.Name}]")
+                .AppendLine($"name = \"{EscapeTomlBasicString(identity.Name)}\"")
+                .AppendLine($"public_key = '''{identity.PublicKey}'''")
+                .Append($"private_key = '''{identity.PrivateKey}'''");
+        }
+
+        builder
+            .AppendLine()
+            .AppendLine()
+            .AppendLine($"[rooms.{string.Join('.', room.PathSegments)}]")
+            .AppendLine($"key = \"{EscapeTomlBasicString(room.Key)}\"")
+            .AppendLine($"identity = \"{EscapeTomlBasicString(room.IdentityName)}\"");
+
+        return builder.ToString();
+    }
+
+    private static bool RoomPathExists(TomlTable roomsTable, IReadOnlyList<string> pathSegments)
+    {
+        TomlTable table = roomsTable;
+        for (int index = 0; index < pathSegments.Count; index++)
+        {
+            string segment = pathSegments[index];
+            if (!table.TryGetValue(segment, out object value))
+            {
+                return false;
+            }
+
+            if (value is not TomlTable childTable)
+            {
+                return false;
+            }
+
+            if (index == pathSegments.Count - 1)
+            {
+                return true;
+            }
+
+            if (childTable.ContainsKey("key"))
+            {
+                return true;
+            }
+
+            table = childTable;
+        }
+
+        return false;
+    }
+
+    private static string EscapeTomlBasicString(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+    }
+}
+
+internal sealed class NewRoomConfig
+{
+    public required IReadOnlyList<string> PathSegments { get; init; }
+    public required string Key { get; init; }
+    public required string IdentityName { get; init; }
 }
 
 internal sealed class ConfigEncryptionEnvelope
